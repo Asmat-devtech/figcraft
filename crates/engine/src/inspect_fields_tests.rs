@@ -415,8 +415,31 @@ fn page_properties_and_other_page_summaries_respect_fields() {
 
 #[test]
 fn the_catalogue_accepts_emitted_keys_and_structure_keys() {
-    let (s, frame, _) = tree();
-    let full = node_json(s.doc().unwrap(), frame, 2);
+    let (mut s, frame, text) = tree();
+    run(&mut s, "node.set", json!({"ids": [frame], "props": {"layout": "grid", "fill": "#123456", "stroke": "#abcdef"}}));
+    s.doc_mut().unwrap().get_mut(frame).unwrap().dev_note = "Ready for review".into();
+    s.doc_mut().unwrap().get_mut(frame).unwrap().dev_changed = true;
+    let main = create(&mut s, json!({"type": "component", "name": "Button"}));
+    let instance = crate::params::id_of(&run(&mut s, "instance.create", json!({"component": main}))["id"]).unwrap();
+    s.doc_mut().unwrap().get_mut(text).unwrap().kind.text_mut().unwrap().style.style_id = Some("synthetic-style".into());
+    // Exercise each of the six property helpers, including their more expensive values.
+    for (id, key, sibling) in [
+        (frame, "absoluteBounds", "width"),
+        (frame, "fills", "strokes"),
+        (text, "gridCell", "sizing"),
+        (frame, "devNote", "devChanged"),
+        (text, "textStyleRanges", "fontFamily"),
+        (instance, "mainComponentName", "mainComponent"),
+    ] {
+        let full = node_json(s.doc().unwrap(), id, 0);
+        assert!(full.get(key).is_some(), "fixture must emit {key}: {full}");
+        assert!(full.get(sibling).is_some(), "fixture must emit {sibling}: {full}");
+        let selected = node(&s, id, 0, json!({"fields": [key]}));
+        assert_eq!(selected[key], full[key]);
+        assert!(selected.get(sibling).is_none(), "unrequested {sibling}: {selected}");
+        keys(&selected, &["id", "children", "childCount", key]);
+    }
+    let full = node_json(s.doc().unwrap(), s.page().unwrap(), 3);
     fn check(s: &Session, full: &Value) {
         let id = crate::params::id_of(&full["id"]).unwrap();
         for (key, value) in full.as_object().unwrap() {

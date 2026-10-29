@@ -48,7 +48,7 @@ blockers.
 | Milestone | Status | Left | Hours |
 |---|---|---|---|
 | M0 Foundation: workspace, model, renderer, engine, UI shell, app, control channel | done (2026-10-09) | — | — |
-| M0.9 CLI + MCP, web build, release packaging, PDF export | done (v0.2.0 released 2026-10-10 for every platform) | — | — |
+| M0.9 CLI + MCP, web build, release packaging, PDF export | done (v0.2.0 released 2026-10-10 for every platform; compact inspection with `fields` and `outline`, part of #996) | — | — |
 | M1 Core editing completeness (tools, panels, menus, clipboard, files) | ~77% | interaction pass (Open recent, the outline mode variants and keyboard box selection landed 2026-10-11; repeat commands preserve the underlying edit and undo steps, #181; the Layout panel's constrain-proportions link scales the other side, #220) | 6–12 + pass |
 | M2 Layout depth | ~80% | grid `fr` rows, real-file QA | 6–12 |
 | M3 Components & styles depth | ~78% (extended collections, variables import/export, gradient stop and variant bindings landed 2026-10-11) | real libraries, component playground | 7–14 |
