@@ -473,7 +473,7 @@ fn kind_props(doc: &Document, n: &Node, o: &mut serde_json::Map<String, Value>, 
                 insert_prop(o, options, "componentProperties", || json!(props));
             }
         }
-        NodeKind::Component { description, props } => {
+        NodeKind::Component { description, props, .. } => {
             if !description.is_empty() {
                 insert_prop(o, options, "description", || json!(description));
             }
@@ -539,6 +539,7 @@ pub fn document_with_options(s: &Session, depth: usize, all_pages: bool, options
             })
             .collect();
     json!({
+        "id": ds.uid,
         "name": doc.name,
         "kind": doc.kind.id(),
         "path": ds.path,

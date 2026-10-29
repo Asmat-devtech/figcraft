@@ -236,7 +236,7 @@ pub struct PointerEvent {
 }
 
 /// The pointer is still within [`DRAG_SLOP_PX`] of where it was pressed.
-fn within_slop(ev: &PointerEvent, start: Point) -> bool {
+pub(crate) fn within_slop(ev: &PointerEvent, start: Point) -> bool {
     (ev.p() - start).hypot() * ev.zoom.max(1e-6) < DRAG_SLOP_PX
 }
 
@@ -336,6 +336,9 @@ pub struct Overlay {
     pub rubber_handle: Option<[f64; 2]>,
     /// Frame/section the pointer is drawing or dropping into (highlighted).
     pub drop_target: Option<NodeId>,
+    /// Connector tool: the attach points (side middles, page x, y) of the object under the pointer,
+    /// and whether the connector end is at each.
+    pub attach: Vec<([f64; 2], bool)>,
     /// Auto layout insertion indicator (x0, y0, x1, y1).
     pub insert_line: Option<[f64; 4]>,
     /// The instance an Alt-drop of a component from the Assets panel would swap (highlighted).

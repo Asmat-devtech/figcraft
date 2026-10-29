@@ -418,6 +418,9 @@ impl Server {
             // current spotlight.
             ClientMsg::Signal(sig) => {
                 let Some(sig) = sig.clean().filter(|s| s.kind != Signal::READY) else { return Vec::new() };
+                if sig.kind == Signal::NAME {
+                    return self.rename(from, sig.text);
+                }
                 if sig.kind == Signal::SPOTLIGHT {
                     if sig.on() {
                         self.spotlight = Some(from);
@@ -445,6 +448,15 @@ impl Server {
                 vec![Outgoing::To(from, ServerMsg::Refused { reason: "managing files and libraries needs a connection of its own".into() })]
             }
         }
+    }
+
+    /// Client `from` is called `name` from now on (cleaned): everyone, itself too, hears it as its
+    /// `PeerJoined`, and newcomers' welcomes list it so.
+    fn rename(&mut self, from: u32, name: String) -> Vec<Outgoing> {
+        let max = self.limits.max_name;
+        let Some(peer) = self.peers.get_mut(&from).filter(|p| p.name != name && name.chars().count() <= max) else { return Vec::new() };
+        peer.name = name;
+        vec![Outgoing::All(ServerMsg::PeerJoined(peer.clone()))]
     }
 
     /// Keep an accepted batch in the log (dropping the oldest beyond the limits).
@@ -557,6 +569,7 @@ impl Server {
         let doc = self.state.document();
         let mut props: BTreeMap<NodeId, BTreeSet<Prop>> = BTreeMap::new();
         let mut gone: BTreeSet<NodeId> = BTreeSet::new();
+        let (mut asked, mut sent) = (BTreeSet::new(), BTreeSet::new());
         let mut out = Vec::new();
         for c in changes {
             match c {
@@ -569,9 +582,11 @@ impl Server {
                 Change::Delete { id } => {
                     gone.insert(*id);
                 }
+                // The same target has the same fix: look each one up once, and send each fix once.
                 other => {
-                    if let Some(fix) = docprops::current(doc, other)?
-                        && !out.contains(&fix)
+                    if Target::of(other).is_some_and(|t| asked.insert(t))
+                        && let Some(fix) = docprops::current(doc, other)?
+                        && Target::of(&fix).is_some_and(|t| sent.insert(t))
                     {
                         out.push(fix);
                     }
@@ -589,19 +604,21 @@ impl Server {
                 nodes.extend(t.write(self.state.value(&t)?.as_ref()));
             }
         }
-        let mut restored = std::collections::BTreeSet::new();
+        // Each deleted node's subtree, pre-order, every node once: a restored node's whole subtree
+        // went out with it, so the walk stops there (deleting a deep chain stays linear).
+        let mut restored = BTreeSet::new();
         for id in gone {
-            match doc.node(id) {
-                Some(_) => {
-                    for d in doc.subtree(id) {
-                        if restored.insert(d)
-                            && let Some(n) = doc.node(d)
-                        {
-                            nodes.push(create_change(n, self.state.key(d))?);
-                        }
-                    }
+            if !doc.contains(id) {
+                nodes.push(Change::Delete { id });
+                continue;
+            }
+            let mut stack = vec![id];
+            while let Some(d) = stack.pop() {
+                let Some(n) = doc.node(d) else { continue };
+                if restored.insert(d) {
+                    nodes.push(create_change(n, self.state.key(d))?);
+                    stack.extend(n.children.iter().rev());
                 }
-                None => nodes.push(Change::Delete { id }),
             }
         }
         nodes.extend(out);

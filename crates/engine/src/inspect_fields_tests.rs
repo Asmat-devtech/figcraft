@@ -65,7 +65,9 @@ fn golden_tree() -> (Session, NodeId) {
 #[test]
 fn empty_options_keep_the_main_tree_and_document_output() {
     let (s, frame) = golden_tree();
-    // Captured with this builder on origin/main (43af145a12eacd1e87f5f5e6984c49b7da040288).
+    // Captured with this builder on origin/main (43af145a12eacd1e87f5f5e6984c49b7da040288), plus the
+    // document `id` that #1533 added. That id comes from a process-wide counter, so it is the
+    // session's own.
     let expected = json!({
         "colorProfile": "srgb",
         "currentPage": 7,
@@ -81,6 +83,7 @@ fn empty_options_keep_the_main_tree_and_document_output() {
                 "Create layer"
             ]
         },
+        "id": s.ds().unwrap().uid,
         "images": 0,
         "kind": "design",
         "name": "Untitled",

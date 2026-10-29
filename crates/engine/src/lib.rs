@@ -39,6 +39,7 @@ pub use automation::file_access;
 pub use automation::inspect;
 pub use automation::params;
 pub use boards::board;
+pub use boards::board_grid;
 pub use boards::board_table;
 pub use boards::board_templates;
 pub use canvas::al_keys;
@@ -76,6 +77,7 @@ pub use selection::rename;
 pub use selection::selection_colors;
 pub use selection::selection_reorder;
 pub use selection::selection_spacing;
+pub use sharing::agent;
 pub use sharing::background;
 pub use sharing::branches;
 pub use sharing::collab;
@@ -108,6 +110,7 @@ pub use derived::{changed_nodes, normalize};
 pub use doc_state::{DocState, History, HistoryEntry, Interaction, PREVIEW_READ_ONLY, Preedit, TextEdit, VersionPreview};
 pub use error::{EngineError, Result, bad};
 pub use prefs::{Clipboard, MAX_RECENT_ACTIONS, Prefs, UI_SCALE_MAX, UI_SCALE_MIN, UiRequest, clamp_ui_scale};
+pub use session::Forward;
 pub use view_state::ViewState;
 
 /// The editing session: open documents, the current tool, clipboard and prefs.
@@ -148,6 +151,11 @@ pub struct Session {
     pub events: Arc<events::EventLog>,
     /// Events recorded inside a group: (kind, document, path, data).
     pending_events: Vec<(String, String, Option<String>, Value)>,
+    /// The AI agent the running command is for ([`Session::execute_as`]), as comments are signed
+    /// (`"Claude (agent)"`); `None` for the user.
+    pub agent: Option<String>,
+    /// Where an attached AI agent last worked ([`Session::agent_presence_at`]): display only.
+    pub agent_presence: Option<agent::AgentPresence>,
 }
 
 impl Default for Session {
@@ -158,6 +166,8 @@ impl Default for Session {
 
 #[cfg(test)]
 mod a11y_keys_tests;
+#[cfg(test)]
+mod agent_presence_tests;
 #[cfg(test)]
 mod al_behaviour_tests;
 #[cfg(test)]
@@ -189,6 +199,8 @@ mod binding_lists_tests;
 #[cfg(test)]
 mod board_connector_tests;
 #[cfg(test)]
+mod board_grid_tests;
+#[cfg(test)]
 mod board_tables_tests;
 #[cfg(test)]
 mod board_tests;
@@ -219,9 +231,15 @@ mod collab_tests;
 #[cfg(test)]
 mod collab_undo_tests;
 #[cfg(test)]
+mod comment_agent_tests;
+#[cfg(test)]
+mod comment_mentions_tests;
+#[cfg(test)]
 mod comments_polish_tests;
 #[cfg(test)]
 mod component_codegen_tests;
+#[cfg(test)]
+mod component_cycle_tests;
 #[cfg(test)]
 mod components_behaviour_tests;
 #[cfg(test)]
@@ -256,6 +274,8 @@ mod doc_urls_tests;
 mod double_click_tests;
 #[cfg(test)]
 mod draw_tools_tests;
+#[cfg(test)]
+mod duplicate_map_tests;
 #[cfg(test)]
 mod duplicate_spacing_tests;
 #[cfg(test)]
@@ -296,6 +316,8 @@ mod fx_behaviour_tests;
 mod gesture_preview_tests;
 #[cfg(test)]
 mod gradient_shorthand_tests;
+#[cfg(test)]
+mod guide_snap_tests;
 #[cfg(test)]
 mod hide_publishing_tests;
 #[cfg(test)]
@@ -406,6 +428,8 @@ mod plugin_panels_tests;
 pub(crate) mod plugins_tests;
 #[cfg(test)]
 mod progressive_blur_tests;
+#[cfg(test)]
+mod prop_order_tests;
 #[cfg(test)]
 mod property_copy_tests;
 #[cfg(test)]
