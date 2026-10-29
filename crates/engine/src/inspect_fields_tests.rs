@@ -470,8 +470,10 @@ fn node_get_uses_options_but_keeps_its_existing_depth_and_selection() {
     let history = s.undo_depth();
     let default = node_json(s.doc().unwrap(), frame, 1);
     assert_eq!(run(&mut s, "node.get", json!({"id": frame})), default);
-    let compact = run(&mut s, "node.get", json!({"id": frame, "fields": [], "depth": 0}));
+    let compact = run(&mut s, "node.get", json!({"id": frame, "fields": []}));
     assert!(compact["children"].is_array(), "the engine command still inspects to depth 1");
+    let error = s.execute("node.get", &json!({"id": frame, "fields": [], "depth": 0})).unwrap_err();
+    assert!(error.to_string().contains("unknown parameter `depth`"), "{error}");
     keys(&compact, &["id", "children", "childCount"]);
     assert!(s.execute("node.get", &json!({"id": frame, "outline": true, "fields": []})).is_err());
     assert_eq!(s.selection(), selection);

@@ -10,6 +10,8 @@ pub mod brush;
 #[cfg(test)]
 mod brush_tests;
 #[cfg(test)]
+mod dot_dash_tests;
+#[cfg(test)]
 mod ops_tests;
 mod points;
 #[cfg(test)]
@@ -91,6 +93,13 @@ fn binary_by(a: &BezPath, b: &BezPath, rule: linesweeper::FillRule, op: lineswee
 /// Normalise a single path's winding (non-zero) into simple even-odd contours.
 pub fn simplify(path: &BezPath) -> Result<BezPath, PathOpsError> {
     binary(path, &BezPath::new(), linesweeper::BinaryOp::Union)
+}
+
+/// Normalize one path using its fill rule. Unlike [`faces`], this emits every contour without a
+/// face-count cap, so render silhouettes preserve large imported networks.
+pub fn simplify_with_rule(path: &BezPath, even_odd: bool) -> Result<BezPath, PathOpsError> {
+    let rule = if even_odd { linesweeper::FillRule::EvenOdd } else { linesweeper::FillRule::NonZero };
+    binary_by(path, &BezPath::new(), rule, linesweeper::BinaryOp::Union)
 }
 
 /// Combine `acc` (the operands so far) with the next operand `p` by `op`.
@@ -309,7 +318,9 @@ pub fn stroke_center(path: &BezPath, width: f64, props: &StrokeProps) -> BezPath
         .with_end_cap(kcap(props.cap_end));
     // Each subpath restarts the pattern, so it can add up to one more pattern's worth of dashes.
     let subpaths = path.elements().iter().filter(|e| matches!(e, PathEl::MoveTo(_))).count() as f64;
-    if let Some(pat) = width::dash_pattern(props).filter(|p| width::dashes_fit(path.perimeter(1.0) + subpaths * p.iter().sum::<f64>(), p)) {
+    let round = [props.cap_start, props.cap_end].into_iter().any(|c| matches!(kcap(c), Cap::Round));
+    let pattern = width::dash_pattern(props).map(|p| p.into_iter().map(|d| if round && d == 0.0 { 1e-3 } else { d }).collect::<Vec<_>>());
+    if let Some(pat) = pattern.filter(|p| width::dashes_fit(path.perimeter(1.0) + subpaths * p.iter().sum::<f64>(), p)) {
         style = style.with_dashes(0.0, pat);
     }
     kurbo::stroke(path.iter(), &style, &kurbo::StrokeOpts::default(), 0.05)

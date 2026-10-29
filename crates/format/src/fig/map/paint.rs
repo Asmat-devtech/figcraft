@@ -1,6 +1,6 @@
 use super::layer::cap_name;
 use super::variables::alias;
-use super::*;
+use super::{Affine, Kv, Mapper, NO_STYLE, Obj, Point, Value, View, copy_num, copy_str, guid, json, matrix, num, rows, vec2};
 
 fn filter_number(value: &Kv) -> Option<f64> {
     let number = match value {
@@ -215,6 +215,14 @@ pub(crate) fn paint(p: &Kv, warn: &mut dyn FnMut(String)) -> Option<Value> {
         _ => {}
     }
     Some(Value::Object(o))
+}
+
+pub(super) fn has_bound_variables(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object.contains_key("boundVariables") || object.values().any(has_bound_variables),
+        Value::Array(values) => values.iter().any(has_bound_variables),
+        _ => false,
+    }
 }
 
 /// The variables bound to the fields of a paint stop, an effect or a layout grid, as its REST

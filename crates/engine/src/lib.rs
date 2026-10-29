@@ -17,6 +17,7 @@ pub mod catalog;
 pub mod cmd;
 mod content;
 mod dev;
+pub mod events;
 mod extensions;
 pub mod fonts;
 pub mod guard;
@@ -143,6 +144,10 @@ pub struct Session {
     pub live: live::Lives,
     /// Commands the UI runs without waiting on a server ([`Session::start_background`]).
     pub background: background::Background,
+    /// Live agent events (comment changes), shared with the control channel's `events.poll`.
+    pub events: Arc<events::EventLog>,
+    /// Events recorded inside a group: (kind, document, path, data).
+    pending_events: Vec<(String, String, Option<String>, Value)>,
 }
 
 impl Default for Session {
@@ -173,6 +178,8 @@ mod arc_fields_tests;
 mod arc_handles_tests;
 #[cfg(test)]
 mod autosave_tests;
+#[cfg(test)]
+mod batch_continue_events_tests;
 #[cfg(test)]
 mod batch_rollback_tests;
 #[cfg(test)]
@@ -254,7 +261,11 @@ mod duplicate_spacing_tests;
 #[cfg(test)]
 mod effects_tests;
 #[cfg(test)]
+mod events_tests;
+#[cfg(test)]
 mod export_behaviour_tests;
+#[cfg(test)]
+mod export_bench_tests;
 #[cfg(test)]
 mod export_depth_tests;
 #[cfg(test)]
@@ -295,6 +306,8 @@ mod html_codegen_tests;
 mod huge_stroke_tests;
 #[cfg(test)]
 mod id_params_behaviour_tests;
+#[cfg(test)]
+mod image_crop_tests;
 #[cfg(test)]
 mod images_left_in_file_tests;
 #[cfg(test)]
@@ -344,7 +357,11 @@ mod menu_gaps_tests;
 #[cfg(test)]
 mod nested_override_tests;
 #[cfg(test)]
+mod node_find_tests;
+#[cfg(test)]
 mod node_set_refusals_tests;
+#[cfg(test)]
+mod normalize_guard_tests;
 #[cfg(test)]
 mod online_tests;
 #[cfg(test)]
@@ -372,7 +389,11 @@ mod pen_end_tests;
 #[cfg(test)]
 mod pen_overlay_tests;
 #[cfg(test)]
+mod penpot_export_tests;
+#[cfg(test)]
 mod pixel_preview_tests;
+#[cfg(test)]
+mod placed_image_size_tests;
 #[cfg(test)]
 mod playground_tests;
 #[cfg(test)]
@@ -423,6 +444,8 @@ mod save_disk_changes_tests;
 mod save_format_tests;
 #[cfg(test)]
 mod scale_tool_tests;
+#[cfg(test)]
+mod scaled_instance_tests;
 #[cfg(test)]
 mod section_contents_tests;
 #[cfg(test)]
@@ -483,6 +506,10 @@ mod theme_pages_tests;
 mod tiff_tests;
 #[cfg(test)]
 mod transform_behaviour_tests;
+#[cfg(test)]
+mod unknown_params_tests;
+#[cfg(test)]
+mod variable_props_tests;
 #[cfg(test)]
 mod variable_tests;
 #[cfg(test)]
