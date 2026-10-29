@@ -357,12 +357,14 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 keys, applied to every layer and page. For example, `fields: ["name", "type", "width", "height"]`
 leaves out paints and text properties; `fields: []` keeps only ids and structure. `id`, `children`,
 depth-boundary `childCount` and the transport's `truncated` marker are always kept (`truncated` is
-not a selectable field). Unknown keys or wrong types
-are errors; an unknown key's error lists the valid keys. Document metadata stays unchanged.
+not a selectable field). An unknown key is an error that lists the valid keys; a `fields` that is
+not an array of strings, or an `outline` that is not a boolean, is an error too. Document metadata
+stays unchanged.
 
 `outline: true` selects `id`, `name`, `type`, `characters`, `mainComponentName` and `visible`, plus
-structure. Text is cut after 120 characters, with ASCII `...` only when longer. Selecting
-`visible`, explicitly or through outline, reports a boolean even for visible layers and pages;
+structure. `characters` is cut after 120 characters (Unicode scalars), with ASCII `...` appended
+only when longer. Selecting `visible`, explicitly or through outline, reports a boolean even for
+visible layers and pages;
 without these options the output stays sparse. `outline: true` cannot be combined with `fields`;
 `outline: false` can. Both options keep the existing depth and response-size limits.
 

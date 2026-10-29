@@ -178,16 +178,16 @@ that `node.set` accepts are listed in [mcp.md](mcp.md#conventions-agents-must-kn
 Both inspection methods accept `fields: [string]`: exact, case-sensitive top-level node keys such
 as `name`, `type`, `x`, `fills`, `characters` or `pluginData`, applied recursively to pages too.
 `[]` keeps only ids and structure. `id`, `children` and depth-boundary `childCount` are always kept.
-Unknown keys are errors listing the valid keys; wrong types are
-errors too.
+An unknown key is an error that lists the valid keys; a `fields` that is not an array of strings,
+or an `outline` that is not a boolean, is an error too.
 
 `outline: true` selects `id`, `name`, `type`, `characters`, `mainComponentName` and `visible`, plus
-structure. `characters` stops at 120 characters, with ASCII `...` appended only when
-longer. When `visible` is selected (by either option), every node has an explicit boolean;
-without options the output stays sparse. `outline: true` with `fields` is an error;
-`outline: false` with `fields` is allowed. Document metadata is unchanged. The engine command
-`node.get` (not this control method) takes the same options but no `depth`: it always returns one
-level of children.
+structure. `characters` is cut after 120 characters (Unicode scalars), with ASCII `...` appended
+only when longer. When `visible` is selected (by either option), every node has an explicit
+boolean; without options the output stays sparse. `outline: true` with `fields` is an error;
+`outline: false` with `fields` is allowed. Document metadata is unchanged. Through
+`engine.execute`, the engine command `node.get` takes the same options but no `depth`; it always
+returns one level of children.
 
 ```json
 {"id":5,"method":"document.inspect","params":{"depth":6,"outline":true}}
