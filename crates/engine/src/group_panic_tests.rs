@@ -40,7 +40,8 @@ fn a_grouped_closure_that_panics_leaves_the_session_as_before() {
         })
     }));
 
-    assert!(unwound.is_err(), "the panic goes on to the caller");
+    let payload = unwound.unwrap_err();
+    assert_eq!(payload.downcast_ref::<&str>(), Some(&"a bug in the closure"), "the original panic goes on to the caller");
     let ds = s.ds().unwrap();
     assert!(Arc::ptr_eq(&ds.doc, &doc));
     assert_eq!(*ds.doc, *doc);
@@ -59,6 +60,44 @@ fn a_grouped_closure_that_panics_leaves_the_session_as_before() {
     assert!(s.doc().unwrap().contains(second));
     rect(&mut s, 60);
     assert_eq!(s.undo_depth(), (depth.0 + 2, 0));
+}
+
+#[test]
+fn a_grouped_closure_that_panics_releases_the_live_hold_so_later_edits_sync() {
+    use crate::live_tests::{push, relay, serve, session};
+
+    let (mut s, script) = session();
+    let first = rect(&mut s, 0);
+    s.execute("collab.host", &json!({})).unwrap();
+    let (mut server, id, welcome) = serve(s.doc().unwrap());
+    push(&script, vec![welcome]);
+    s.live_poll();
+    assert!(s.live_doc(s.ds().unwrap().uid));
+    let before = s.doc().unwrap().clone();
+    script.lock().unwrap().msgs.clear();
+
+    let unwound = catch_unwind(AssertUnwindSafe(|| {
+        s.grouped("Rename then panic", |s| -> crate::Result<()> {
+            s.execute("node.set", &json!({"id": first, "props": {"name": "Rolled back"}}))?;
+            s.live_sync();
+            assert!(script.lock().unwrap().msgs.is_empty(), "the edit waits for the group to end");
+            panic!("a bug in the live closure");
+        })
+    }));
+
+    assert!(unwound.is_err());
+    assert_eq!(s.doc().unwrap(), &before);
+    s.live_sync();
+    assert!(script.lock().unwrap().msgs.is_empty(), "the rolled-back edit never goes out");
+
+    s.execute("node.set", &json!({"id": first, "props": {"name": "Sent afterwards"}})).unwrap();
+    s.live_sync();
+    assert_eq!(script.lock().unwrap().msgs.len(), 1, "the later edit goes out");
+    let replies = relay(&script, &mut server, id);
+    push(&script, replies);
+    s.live_poll();
+    assert_eq!(server.document().node(first).unwrap().name, "Sent afterwards");
+    assert_eq!(s.doc().unwrap(), server.document());
 }
 
 #[test]
