@@ -4,7 +4,13 @@ use super::{DocState, Document, EngineError, LineHeight, NodeId, NodeKind, Resul
 
 /// The recovery copy at `path` as a document with unsaved changes and no path.
 pub(crate) fn recovered(path: &str) -> Result<DocState> {
-    let loaded = read(path).and_then(|b| figcraft_format::load_bytes_with_versions(&b).map_err(|e| EngineError::Other(e.to_string())))?;
+    recovered_from(&read(path)?)
+}
+
+/// A recovery copy's bytes as a document with unsaved changes and no path (the browser keeps its
+/// copies in the page's storage, not in files).
+pub(crate) fn recovered_from(bytes: &[u8]) -> Result<DocState> {
+    let loaded = figcraft_format::load_bytes_with_versions(bytes).map_err(|e| EngineError::Other(e.to_string()))?;
     Ok(DocState::new(loaded.doc, None).with_versions(loaded.versions).with_branches(loaded.branches).unsaved())
 }
 
@@ -693,6 +699,10 @@ pub(crate) fn variables_param(cmd: &str, p: &Value) -> Result<Option<Value>> {
         None | Some(Value::Null) => return Ok(None),
         Some(v @ Value::Object(_)) => v.clone(),
         Some(Value::String(s)) if s.trim_start().starts_with('{') => parse(s.as_bytes())?,
+        // Capped like the sibling file; the browser has no file system, which `read` says.
+        #[cfg(not(target_arch = "wasm32"))]
+        Some(Value::String(path)) => parse(&read_capped(path, MAX_VARIABLES_FILE)?)?,
+        #[cfg(target_arch = "wasm32")]
         Some(Value::String(path)) => parse(&read(path)?)?,
         Some(_) => return Err(bad(cmd, "variables: the local variables JSON (an object, JSON text or a path)")),
     };

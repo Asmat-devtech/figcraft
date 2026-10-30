@@ -1848,6 +1848,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -2100,6 +2101,7 @@ dependencies = [
  "egui",
  "figcraft-collab-net",
  "figcraft-engine",
+ "figcraft-format",
  "figcraft-text",
  "figcraft-ui-egui",
  "js-sys",

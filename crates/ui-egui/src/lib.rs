@@ -49,6 +49,8 @@ mod canvas_drag_tests;
 #[cfg(test)]
 mod canvas_fixes_tests;
 #[cfg(test)]
+mod canvas_hover_tests;
+#[cfg(test)]
 mod canvas_image_rect_tests;
 #[cfg(test)]
 mod clipboard_fence_tests;
@@ -314,8 +316,8 @@ pub(crate) use clock::repaint_in;
 pub use clock::{AUTO_SAVE_SECS, AUTOSAVE_SECS, FrameClock, ToastClock};
 pub(crate) use open::{drop_overlay, dropped_bytes, is_document, opens};
 pub use services::{
-    ContentsFuture, DialogFuture, MAX_CLIPBOARD_PNG_BYTES, NoServices, ReadFuture, Services, browser_can_read, egui_copy_png, egui_copy_text,
-    unreadable,
+    ContentsFuture, DialogFuture, MAX_CLIPBOARD_PNG_BYTES, NoServices, ReadFuture, Services, browser_can_read, browser_stopped, egui_copy_png,
+    egui_copy_text, unreadable,
 };
 use services::{DialogDone, PickFuture, Picked, RepaintWaker};
 pub use state::{

@@ -187,6 +187,8 @@ mod arc_fields_tests;
 #[cfg(test)]
 mod arc_handles_tests;
 #[cfg(test)]
+mod auto_layout_move_tests;
+#[cfg(test)]
 mod autosave_tests;
 #[cfg(test)]
 mod batch_continue_events_tests;
@@ -206,6 +208,8 @@ mod board_tables_tests;
 mod board_tests;
 #[cfg(test)]
 mod board_tools_tests;
+#[cfg(test)]
+mod boolean_cap_tests;
 #[cfg(test)]
 mod booleans_tests;
 #[cfg(test)]
@@ -232,6 +236,8 @@ mod collab_tests;
 mod collab_undo_tests;
 #[cfg(test)]
 mod comment_agent_tests;
+#[cfg(test)]
+mod comment_link_tests;
 #[cfg(test)]
 mod comment_mentions_tests;
 #[cfg(test)]
@@ -349,6 +355,8 @@ mod interaction_rollback_tests;
 #[cfg(test)]
 mod invite_links_tests;
 #[cfg(test)]
+mod jam_open_tests;
+#[cfg(test)]
 mod keymap_tests;
 #[cfg(test)]
 mod library_path_tests;
@@ -410,6 +418,8 @@ mod pdf_print_tests;
 mod pen_end_tests;
 #[cfg(test)]
 mod pen_overlay_tests;
+#[cfg(test)]
+mod pen_vector_edit_tests;
 #[cfg(test)]
 mod penpot_export_tests;
 #[cfg(test)]
