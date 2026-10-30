@@ -50,6 +50,8 @@ mod text_skip_ink_tests;
 mod text_style_tests;
 #[cfg(test)]
 mod text_wrap_tests;
+#[cfg(test)]
+mod value_budget_tests;
 
 use std::collections::BTreeMap;
 use std::io::Read;

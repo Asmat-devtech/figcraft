@@ -79,41 +79,41 @@ message Blob byte[] bytes
 message Message NodeChange[] nodeChanges, Blob[] blobs
 ";
 
-fn schema() -> Schema {
+pub(super) fn schema() -> Schema {
     Schema::parse(SCHEMA).unwrap()
 }
 
-fn o(fields: Vec<(&'static str, Kv<'static>)>) -> Kv<'static> {
+pub(super) fn o(fields: Vec<(&'static str, Kv<'static>)>) -> Kv<'static> {
     Kv::Object(fields)
 }
-fn f(x: f64) -> Kv<'static> {
+pub(super) fn f(x: f64) -> Kv<'static> {
     Kv::Float(x as f32)
 }
-fn u(x: u64) -> Kv<'static> {
+pub(super) fn u(x: u64) -> Kv<'static> {
     Kv::Uint(x)
 }
 fn e(n: &'static str) -> Kv<'static> {
     Kv::Enum(n)
 }
-fn s(x: &str) -> Kv<'static> {
+pub(super) fn s(x: impl Into<String>) -> Kv<'static> {
     Kv::Str(x.into())
 }
-fn g(l: u64) -> Kv<'static> {
+pub(super) fn g(l: u64) -> Kv<'static> {
     o(vec![("sessionID", u(1)), ("localID", u(l))])
 }
-fn arr(v: Vec<Kv<'static>>) -> Kv<'static> {
+pub(super) fn arr(v: Vec<Kv<'static>>) -> Kv<'static> {
     Kv::Array(v)
 }
-fn xy(x: f64, y: f64) -> Kv<'static> {
+pub(super) fn xy(x: f64, y: f64) -> Kv<'static> {
     o(vec![("x", f(x)), ("y", f(y))])
 }
-fn at(x: f64, y: f64) -> Kv<'static> {
+pub(super) fn at(x: f64, y: f64) -> Kv<'static> {
     o(vec![("m00", f(1.0)), ("m01", f(0.0)), ("m02", f(x)), ("m10", f(0.0)), ("m11", f(1.0)), ("m12", f(y))])
 }
 fn rgb(r: f64, gr: f64, b: f64) -> Kv<'static> {
     o(vec![("r", f(r)), ("g", f(gr)), ("b", f(b)), ("a", f(1.0))])
 }
-fn solid(r: f64, gr: f64, b: f64) -> Kv<'static> {
+pub(super) fn solid(r: f64, gr: f64, b: f64) -> Kv<'static> {
     o(vec![("type", e("SOLID")), ("color", rgb(r, gr, b)), ("opacity", f(1.0)), ("visible", Kv::Bool(true))])
 }
 fn root_guid() -> Kv<'static> {
@@ -128,7 +128,7 @@ fn prop_ref(def: u64, field: &'static str) -> Kv<'static> {
 }
 
 /// A node: id (0: the document), parent (id, position), type, name and further fields.
-fn node(id: u64, par: Option<(u64, &str)>, ty: &'static str, name: &str, mut more: Vec<(&'static str, Kv<'static>)>) -> Kv<'static> {
+pub(super) fn node(id: u64, par: Option<(u64, &str)>, ty: &'static str, name: &str, mut more: Vec<(&'static str, Kv<'static>)>) -> Kv<'static> {
     let mut v = vec![("guid", if id == 0 { root_guid() } else { g(id) })];
     if let Some((p, pos)) = par {
         v.push(("parentIndex", o(vec![("guid", if p == 0 { root_guid() } else { g(p) }), ("position", s(pos))])));
@@ -803,10 +803,10 @@ fn other_files_are_not_fig() {
     assert!(try_import(&native, "x").is_none());
 }
 
-/// A cheap deterministic generator for the mangle tests.
-struct Lcg(u64);
+/// A cheap deterministic generator (mangled inputs, generated fixtures).
+pub(super) struct Lcg(pub(super) u64);
 impl Lcg {
-    fn next(&mut self) -> u64 {
+    pub(super) fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         self.0 >> 33
     }
@@ -889,6 +889,14 @@ fn large_files_get_a_larger_value_budget() {
     assert!(kiwi::value_budget(39_528_420) > 29_703_730);
     // Still bounded by the largest canvas read.
     assert!(kiwi::value_budget(MAX_CANVAS as usize) <= 128 << 20);
+    // Counting every scalar field, a dense file may reach about 2.4 values per compressed byte (the
+    // 15 MB text-heavy fixture in `value_budget_tests` measures 1.8): below the ceiling the budget must
+    // cover that, the floor still holds up to 5 MB of canvas, and 32 MiB is enough for the ceiling.
+    assert!(kiwi::value_budget(8 << 20) >= (8 << 20) * 12 / 5);
+    #[cfg(not(target_pointer_width = "32"))]
+    assert!(kiwi::value_budget(30_000_000) >= 30_000_000 * 12 / 5);
+    assert_eq!(kiwi::value_budget(5_000_000), 20_000_000);
+    assert_eq!(kiwi::value_budget(32 << 20), kiwi::value_budget(MAX_CANVAS as usize));
 }
 
 #[test]
