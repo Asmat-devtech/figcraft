@@ -456,3 +456,86 @@ fn assert_within(a: &Pixmap, b: &Pixmap, rows_down: u32, tol: u8, what: &str) {
     let worst = a.data().iter().zip(below).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
     assert!(worst <= tol, "{what}: differs by {worst} levels");
 }
+
+#[test]
+fn backdrops_at_the_views_edge_patch_as_they_render() {
+    fonts();
+    let blur = |r: f64| {
+        let mut e = Effect::background_blur();
+        if let EffectKind::BackgroundBlur(b) = &mut e.kind {
+            b.radius = r;
+        }
+        e
+    };
+    let mut glass = Effect::glass();
+    if let EffectKind::Glass(g) = &mut glass.kind {
+        (g.depth, g.refraction) = (30.0, 1.0);
+    }
+    // A layer reading its backdrop across the view's left edge, over stripes, and a square moved
+    // beside it in the view and off it: what the patch reads past the edge a full render doesn't.
+    for (why, fx) in [("a background blur of 60", blur(60.0)), ("glass", glass)] {
+        for (from, by) in [((180.0, 100.0), (15.0, 10.0)), ((-150.0, 100.0), (20.0, 0.0))] {
+            let mut d = Document::new("edge");
+            let p = d.first_page().unwrap();
+            for k in 0..20 {
+                let s = d.create(p, NodeKind::Rectangle, "S", -200.0 + f64::from(k) * 20.0, 0.0, 10.0, 400.0).unwrap();
+                solid(d.node_mut(s).unwrap(), if k % 2 == 0 { "FF0000" } else { "0000FF" });
+            }
+            let e = d.create(p, NodeKind::Rectangle, "E", -60.0, 50.0, 160.0, 200.0).unwrap();
+            let n = d.node_mut(e).unwrap();
+            n.fills = vec![Paint { opacity: 0.2, ..Paint::solid(Color::WHITE) }];
+            n.effects = vec![fx.clone()];
+            let m = d.create(p, NodeKind::Rectangle, "M", from.0, from.1, 40.0, 40.0).unwrap();
+            solid(d.node_mut(m).unwrap(), "00AA00");
+            let before = Arc::new(d);
+            let after = edit(&before, |d| d.node_mut(m).unwrap().transform = Affine::translate((from.0 + by.0, from.1 + by.1)));
+            let v = View { origin: (0.0, 0.0), scale: 1.0, width: 400, height: 300 };
+            let mut r = Retained::default();
+            r.render(&before, p, &v, &Options::default()).unwrap();
+            let (shown, pix, work) = r.render(&after, p, &v, &Options::default()).unwrap();
+            let pix = pix.clone();
+            let full = render_view(&after, p, &shown, &Options::default()).unwrap();
+            let worst = pix.data().iter().zip(full.data()).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+            assert!(worst <= 2, "{why}, a square moved from {from:?}: {work:?} is {worst} levels off a full render");
+        }
+    }
+}
+
+#[test]
+fn pans_patch_backdrops_at_the_edges_that_moved_in() {
+    fonts();
+    let mut blur = Effect::background_blur();
+    if let EffectKind::BackgroundBlur(b) = &mut blur.kind {
+        b.radius = 10.0;
+    }
+    let mut glass = Effect::glass();
+    if let EffectKind::Glass(g) = &mut glass.kind {
+        (g.depth, g.refraction) = (30.0, 1.0);
+    }
+    // A layer reading its backdrop across all four edges of the view, over stripes: after a pan,
+    // what it read past an edge that moved in is past the edge no more.
+    for (why, fx) in [("a background blur of 10", blur), ("glass", glass)] {
+        let mut d = Document::new("pan");
+        let p = d.first_page().unwrap();
+        for k in 0..40 {
+            let s = d.create(p, NodeKind::Rectangle, "S", -200.0 + f64::from(k) * 20.0, -100.0, 10.0, 600.0).unwrap();
+            solid(d.node_mut(s).unwrap(), if k % 2 == 0 { "FF0000" } else { "0000FF" });
+        }
+        let e = d.create(p, NodeKind::Rectangle, "E", -60.0, -60.0, 500.0, 420.0).unwrap();
+        let n = d.node_mut(e).unwrap();
+        n.fills = vec![Paint { opacity: 0.2, ..Paint::solid(Color::WHITE) }];
+        n.effects = vec![fx];
+        let doc = Arc::new(d);
+        for (dx, dy) in [(30.0, 0.0), (-30.0, 0.0), (0.0, 30.0), (0.0, -30.0)] {
+            let mut r = Retained::default();
+            r.render(&doc, p, &View { origin: (0.0, 0.0), scale: 1.0, width: 400, height: 300 }, &Options::default()).unwrap();
+            let v = View { origin: (dx, dy), scale: 1.0, width: 400, height: 300 };
+            let (shown, pix, work) = r.render(&doc, p, &v, &Options::default()).unwrap();
+            let pix = pix.clone();
+            let full = render_view(&doc, p, &shown, &Options::default()).unwrap();
+            let worst = pix.data().iter().zip(full.data()).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+            assert!(partial(work), "{why}, a pan by ({dx}, {dy}): {work:?}");
+            assert!(worst <= 2, "{why}, a pan by ({dx}, {dy}): {work:?} is {worst} levels off a full render");
+        }
+    }
+}
