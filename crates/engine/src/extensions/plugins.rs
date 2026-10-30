@@ -107,6 +107,8 @@ const DENIED: &[&str] = &[
     "plugins.",
     "libraries.",
     "library.add",
+    // Contacts the servers a file names, and remembers them as yours (#1097).
+    "library.check",
     // Uploads the open document to a server.
     "library.publishToServer",
     "edit.undo",
@@ -232,7 +234,16 @@ impl figcraft_plugin::Host for EngineHost<'_> {
             }
             Ok(v)
         });
-        r.map(|v| v.to_string()).map_err(|e| e.to_string())
+        r.map(|mut v| {
+            // A plugin gets the open files' names, not where they are on disk (#1117).
+            if command == "doc.list" {
+                for e in v.as_array_mut().into_iter().flatten().filter_map(Value::as_object_mut) {
+                    e.remove("path");
+                }
+            }
+            v.to_string()
+        })
+        .map_err(|e| e.to_string())
     }
 
     fn selection(&mut self) -> String {
