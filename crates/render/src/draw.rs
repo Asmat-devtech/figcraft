@@ -474,7 +474,7 @@ pub(crate) fn bounds_within<'a>(
 
 /// The most one effect counts for in [`effect_margin`] (document units): far past any view, and
 /// sums of any number of them stay finite.
-const MAX_REACH: f64 = 1e12;
+pub(crate) const MAX_REACH: f64 = 1e12;
 
 /// How far (document units) effects that read outside a node's paint bounds reach: blurs, glass,
 /// drop shadows and texture. Culling and partial renders keep this much margin.

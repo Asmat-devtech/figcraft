@@ -436,14 +436,15 @@ fn a_shadow_cast_from_a_blurred_layer_draws_the_same_in_a_cut_view() {
     assert_within(&part, &one, 390, 2, "the shadow of a blurred layer above the view");
 }
 
-/// Reaches too large to add (texture of 1e308, twice) still keep a margin, not none.
+/// Reaches too large to add (texture of 1e308, twice) each count up to the cap and add up: a margin
+/// that stays finite, not none, and not the largest one alone.
 #[test]
 fn effect_margins_too_large_to_add_stay_large() {
     let mut n = Node::new(NodeId(1), NodeKind::Rectangle, "T", 10.0, 10.0);
     let t = figcraft_doc::Texture { radius: 1e308, ..Default::default() };
     n.effects = vec![Effect { kind: EffectKind::Texture(t.clone()), visible: true }, Effect { kind: EffectKind::Texture(t), visible: true }];
     let m = crate::draw::effect_margin(&n);
-    assert!(m.is_finite() && m > 1e6, "{m}");
+    assert_eq!(m, 2.0 * crate::draw::MAX_REACH);
 }
 
 /// Every channel of `a` within `tol` of the same channel of `b` from row `rows_down` on.
