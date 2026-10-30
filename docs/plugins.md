@@ -180,7 +180,7 @@ with the same limits and its manifest's permissions, as any other.
 
 The desktop app keeps such plugins per user, beside its settings (`Plugins/` in FigCraft's settings
 folder: `%APPDATA%\FigCraft` on Windows, `~/Library/Application Support/FigCraft` on macOS,
-`~/.config/FigCraft` elsewhere), each in a folder of its own named by a hash of its id, with its
+`~/.config/FigCraft` elsewhere; `config/` beside the executable in a portable copy), each in a folder of its own named by a hash of its id, with its
 module and its assets. The CLI and the MCP server install for the session only.
 
 **Updating.** When the directory has a newer version than the one installed, the plugin's row
@@ -262,8 +262,8 @@ it can handle):
   back), `codeConnect.import` with a `path` and `variable.import` with a file path instead of JSON,
   `window.*` (new windows open files), `view.theme*`;
 - live sessions and online files: `collab.*`;
-- other documents and the version history: `doc.*` and `version.*` (except `doc.list` and
-  `version.list`);
+- other documents and the version history: `doc.*` and `version.*` (except `doc.list`, which gives a
+  plugin the open files' names but not their paths, and `version.list`);
 - the undo history and nesting: `edit.undo`, `edit.redo`, `edit.repeat`, `command.batch` (a run is
   already one undo step), `plugin.*` / `plugins.*` (no plugin runs another) and `widget.*`;
 - writing layer data whose key starts with `figcraft.widget` (a widget's own data: no plugin can

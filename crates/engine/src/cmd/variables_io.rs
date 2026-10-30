@@ -25,7 +25,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "variable.import",
             "Import variables",
-            "{variables (the local variables JSON, as variable.export writes it: an object, JSON text or a path; `variableCollections` and `variables` under `meta` or at the top level)}  collections join this file's collection of the same name (values by mode name; new modes and variables are added, a variable of another type is skipped), others are added  → {collections (added), variables (added), updated, warnings (also when it holds no variables, or fewer than its collections list)}",
+            "{variables (the local variables JSON, as variable.export writes it: an object, JSON text or a path to a regular file of at most 256 MiB; `variableCollections` and `variables` under `meta` or at the top level)}  collections join this file's collection of the same name (values by mode name; new modes and variables are added, a variable of another type is skipped), others are added  → {collections (added), variables (added), updated, warnings (also when it holds no variables, or fewer than its collections list)}",
             true,
             import
         ),
@@ -62,7 +62,7 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// `text` as a CSS comment or quoted string body.
 fn css_safe(text: &str) -> String {
-    text.replace("*/", "* /").replace(['"', '\\', '\n'], " ")
+    text.replace("*/", "* /").replace(['"', '\\', '\n', '\r', '\u{c}'], " ")
 }
 
 /// Each collection's variables as custom properties (named as generated code names them): the

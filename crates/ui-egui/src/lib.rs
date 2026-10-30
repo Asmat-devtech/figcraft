@@ -49,6 +49,8 @@ mod canvas_drag_tests;
 #[cfg(test)]
 mod canvas_fixes_tests;
 #[cfg(test)]
+mod canvas_hover_tests;
+#[cfg(test)]
 mod canvas_image_rect_tests;
 #[cfg(test)]
 mod clipboard_fence_tests;
@@ -63,9 +65,13 @@ mod component_props_reorder_tests;
 #[cfg(test)]
 mod component_swap_default_tests;
 #[cfg(test)]
+mod component_swap_search_tests;
+#[cfg(test)]
 mod context_menu_tests;
 #[cfg(test)]
 mod corner_individual_tests;
+#[cfg(test)]
+mod crop_image_tests;
 #[cfg(test)]
 mod cursors_tests;
 #[cfg(test)]
@@ -74,6 +80,8 @@ mod design_paste_tests;
 mod dev_mode_tests;
 #[cfg(test)]
 mod devmode_tail_tests;
+#[cfg(test)]
+mod display_name_tests;
 #[cfg(test)]
 mod duplicate_paint_tests;
 #[cfg(test)]
@@ -90,6 +98,8 @@ mod gap_handle_tests;
 mod gradient_shorthand_tests;
 #[cfg(test)]
 mod guide_release_tests;
+#[cfg(test)]
+mod guide_snap_tests;
 #[cfg(test)]
 mod home_recents_tests;
 #[cfg(test)]
@@ -117,6 +127,8 @@ mod live_docs_tests;
 #[cfg(test)]
 mod live_join_tests;
 #[cfg(test)]
+mod live_joining_tests;
+#[cfg(test)]
 mod live_server_tests;
 #[cfg(test)]
 mod live_share_tests;
@@ -124,6 +136,10 @@ mod live_share_tests;
 mod live_tests;
 #[cfg(test)]
 mod live_text_tests;
+#[cfg(test)]
+mod local_fonts_tests;
+#[cfg(test)]
+mod make_slot_naming_tests;
 #[cfg(test)]
 mod measure_nudge_tests;
 #[cfg(test)]
@@ -291,6 +307,7 @@ pub use control::{ControlReply, ControlRequest, RequestGate, RequestState};
 mod app;
 mod clock;
 mod open;
+mod selection_cache;
 mod services;
 mod state;
 
@@ -298,8 +315,8 @@ pub(crate) use clock::repaint_in;
 pub use clock::{AUTO_SAVE_SECS, AUTOSAVE_SECS, FrameClock, ToastClock};
 pub(crate) use open::{drop_overlay, dropped_bytes, is_document, opens};
 pub use services::{
-    ContentsFuture, DialogFuture, MAX_CLIPBOARD_PNG_BYTES, NoServices, ReadFuture, Services, browser_can_read, egui_copy_png, egui_copy_text,
-    unreadable,
+    ContentsFuture, DialogFuture, MAX_CLIPBOARD_PNG_BYTES, NoServices, ReadFuture, Services, browser_can_read, browser_stopped, egui_copy_png,
+    egui_copy_text, unreadable,
 };
 use services::{DialogDone, PickFuture, Picked, RepaintWaker};
 pub use state::{
@@ -341,6 +358,8 @@ pub struct UiState {
     /// small window draws).
     pub left_width: f32,
     pub right_width: f32,
+    /// The right sidebar as drawn this frame, after fitting the window.
+    pub right_panel_rect: Option<egui::Rect>,
     pub right_tab: RightTab,
     /// The tab of the previous frame, to see the right panel change mode.
     pub last_right_tab: RightTab,
@@ -410,11 +429,16 @@ pub struct UiState {
     /// The prototype preview pane floating over the canvas, when open.
     pub preview: Option<present::Pane>,
     pub picker: Option<colorpicker::PickerTarget>,
+    /// Crop mode (`image.crop`): the layer and the index of the image fill whose crop handles
+    /// show on the canvas until Enter, Escape or a click outside the image.
+    pub crop: Option<(NodeId, usize)>,
     /// The colour picker's popover while it is open (its place survives a drag).
     pub picker_popover: Option<popover::Popover>,
     /// The control that opened the picker, refreshed every frame it is drawn (the panel scrolls):
     /// a press in it is held out of the popover's closing, so its own click toggles the picker.
     pub picker_button: Option<egui::Rect>,
+    /// The opening widget, so only that control refreshes the held rectangle as it moves.
+    pub picker_button_id: Option<egui::Id>,
     pub context_menu: Option<(egui::Pos2, Vec<NodeId>)>,
     /// The context menu was asked for from the keyboard (`view.contextMenu`): it opens at the
     /// focused layer row or the canvas selection and takes the keyboard.
@@ -551,6 +575,7 @@ impl Default for UiState {
         Self {
             left_width: PANEL_DEFAULT,
             right_width: PANEL_DEFAULT,
+            right_panel_rect: None,
             right_tab: RightTab::Design,
             last_right_tab: RightTab::Design,
             left_tab: LeftTab::File,
@@ -593,8 +618,10 @@ impl Default for UiState {
             present_view: present::PresentView::default(),
             preview: None,
             picker: None,
+            crop: None,
             picker_popover: None,
             picker_button: None,
+            picker_button_id: None,
             context_menu: None,
             key_menu: false,
             key_box: None,

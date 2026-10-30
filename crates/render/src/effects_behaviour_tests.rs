@@ -228,6 +228,59 @@ fn effects_on_a_group_apply_to_the_group_as_a_whole() {
     }
 }
 
+/// A group's or an unclipped frame's effects apply to what its children paint, children reaching
+/// past its box included: its layer holds that too, grown by the effects, so nothing is cut where
+/// a child's paint ends; and an unclipped frame's export holds it.
+#[test]
+fn a_containers_effects_reach_past_what_its_children_paint() {
+    let blur = || fx(EffectKind::LayerBlur(Blur::uniform(20.0)));
+    let shadow = |dy: f64| fx(EffectKind::DropShadow(sharp((0.0, dy), 0.0)));
+    // (why, container, its effects, the child's box, the child's effects)
+    let rows = [
+        ("a blurred group over a child's shadow", NodeKind::Group, vec![blur()], (20.0, 20.0, 60.0, 60.0), vec![shadow(80.0)]),
+        ("an unclipped frame's shadow of a child sticking out", NodeKind::Frame, vec![shadow(40.0)], (60.0, 60.0, 80.0, 80.0), vec![]),
+        ("an unclipped frame's blur of a child sticking out", NodeKind::Frame, vec![blur()], (60.0, 60.0, 80.0, 80.0), vec![]),
+    ];
+    for (why, kind, effects, (x, y, w, h), child_fx) in rows {
+        // `room`: an empty child as large as the view, so the layer can't be cut: what it should draw.
+        let scene = |room: bool| {
+            let (mut d, p) = page();
+            let c = d.create(p, kind.clone(), "C", 0.0, 0.0, 100.0, 100.0).unwrap();
+            let node = d.get_mut(c).unwrap();
+            node.clip = false;
+            node.fills.clear();
+            node.effects = effects.clone();
+            let r = rect(&mut d, c, (x, y, w, h), vec![Paint::solid(hex("FF0000"))]);
+            d.get_mut(r).unwrap().effects = child_fx.clone();
+            if room {
+                rect(&mut d, c, (-200.0, -200.0, 600.0, 600.0), vec![]);
+            }
+            (d, c)
+        };
+        let ((d, c), (truth, _)) = (scene(false), scene(true));
+        let v = View { origin: (-100.0, -100.0), scale: 1.0, width: 400, height: 400 };
+        let (a, b) = (
+            render_view_single(&d, page_of(&d), &v, &Options::default()).unwrap(),
+            render_view_single(&truth, page_of(&truth), &v, &Options::default()).unwrap(),
+        );
+        let worst = a.data().iter().zip(b.data()).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+        // The export holds all of it: as much paint as the export with room to spare.
+        let ink = |p: Pixmap| p.pixels().iter().map(|c| u64::from(c.alpha())).sum::<u64>();
+        let (got, all) = (ink(render_node(&d, c, 1.0).unwrap()), ink(render_node(&truth, page_child(&truth), 1.0).unwrap()));
+        assert!(worst <= 1, "{why}: the canvas draws {worst} levels off");
+        assert!(got * 1000 >= all * 999, "{why}: the export holds {got} of {all} of the paint");
+    }
+}
+
+fn page_of(d: &Document) -> NodeId {
+    d.first_page().unwrap()
+}
+
+/// The page's first layer.
+fn page_child(d: &Document) -> NodeId {
+    *d.node(page_of(d)).unwrap().children.first().unwrap()
+}
+
 #[test]
 fn inner_shadows_paint_inside_over_the_fills_under_strokes_and_children() {
     let green = [0, 255, 0];
@@ -376,6 +429,29 @@ fn exports_include_what_effects_paint_outside_the_layer() {
     let f = d.create(p, NodeKind::Frame, "F", 50.0, 50.0, 40.0, 40.0).unwrap();
     d.get_mut(f).unwrap().effects = vec![fx(EffectKind::DropShadow(sharp((0.0, 10.0), 0.0)))];
     assert!(render_node(&d, f, 1.0).unwrap().height() >= 50, "frame shadow exported");
+}
+
+/// Layer blurs and texture apply one after another and drop shadows are cast from what they leave:
+/// the export holds what they reach together, so nothing is cut at its edges.
+#[test]
+fn exports_hold_what_stacked_effects_reach_together() {
+    let blur = |r: f64| fx(EffectKind::LayerBlur(Blur::uniform(r)));
+    let rows = [
+        ("four blurs of 25", vec![blur(25.0), blur(25.0), blur(25.0), blur(25.0)]),
+        ("eight blurs of 10", (0..8).map(|_| blur(10.0)).collect()),
+        ("sixteen blurs of 3", (0..16).map(|_| blur(3.0)).collect()),
+        ("texture over blurs", vec![blur(15.0), blur(15.0), fx(EffectKind::Texture(figcraft_doc::Texture { radius: 12.0, ..Default::default() }))]),
+        ("a blur under a shadow", vec![blur(20.0), fx(EffectKind::DropShadow(sharp((0.0, 30.0), 0.0)))]),
+        ("a shadow then a blur", vec![fx(EffectKind::DropShadow(sharp((0.0, 30.0), 0.0))), blur(20.0)]),
+    ];
+    for (why, effects) in rows {
+        let (d, r) = square(vec![Paint::solid(hex("FF0000"))], effects);
+        let p = render_node(&d, r, 1.0).unwrap();
+        let (w, h) = (p.width(), p.height());
+        let alpha = |x: u32, y: u32| p.pixel(x, y).map_or(0, |c| c.alpha());
+        let edge = (0..w).flat_map(|x| [alpha(x, 0), alpha(x, h - 1)]).chain((0..h).flat_map(|y| [alpha(0, y), alpha(w - 1, y)])).max().unwrap_or(0);
+        assert!(edge <= 1, "{why}: the export's edge has alpha {edge} ({w} × {h})");
+    }
 }
 
 /// A black 200 × 200 frame with a uniform layer blur of `radius`, drawn on a 512 × 512 view at 1×.

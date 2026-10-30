@@ -33,7 +33,7 @@ use load::font_report;
 #[cfg(test)]
 pub(crate) use load::{installed_family, sketch_line};
 pub use load::{load, load_bytes, load_path};
-pub(crate) use load::{load_fig, read_capped, recovered, variables_param, write};
+pub(crate) use load::{load_fig, read_capped, recovered, recovered_from, variables_param, write};
 pub use open::MAX_RECENT;
 #[cfg(test)]
 use open::append_pages;
@@ -181,11 +181,16 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.recover",
             "Recover file",
-            "{path}  open a recovery copy (written while the app runs, read back after a crash) as a document with unsaved changes and no path: saving asks where → {index}",
+            "{path | data (base64: the copy's bytes, as the browser keeps them)}  open a recovery copy (written while the app runs, read back after a crash) as a document with unsaved changes and no path: saving asks where → {index}",
             false,
             |s, p| {
-                let path = req_string("file.recover", p, "path")?;
-                s.docs.push(recovered(&path)?);
+                let ds = match string(p, "data") {
+                    Some(d) => recovered_from(
+                        &base64::engine::general_purpose::STANDARD.decode(d.trim()).map_err(|e| bad("file.recover", format!("`data`: {e}")))?,
+                    )?,
+                    None => recovered(&req_string("file.recover", p, "path")?)?,
+                };
+                s.docs.push(ds);
                 s.active = s.docs.len() - 1;
                 Ok(json!({"index": s.active}))
             }
@@ -318,15 +323,29 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         spec!("doc.nextTab", "Next tab", "{}", false, |s, _| cycle_doc(s, 1)),
         spec!("doc.previousTab", "Previous tab", "{}", false, |s, _| cycle_doc(s, -1)),
-        spec!("doc.list", "List documents", "{}", false, |s, _| {
-            Ok(Value::Array(
-                s.docs
-                    .iter()
-                    .enumerate()
-                    .map(|(i, d)| json!({"index": i, "name": d.doc.name, "path": d.path, "dirty": d.is_dirty(), "active": i == s.active}))
-                    .collect(),
-            ))
-        }),
+        spec!(
+            "doc.list",
+            "List documents",
+            "{}  → [{index, id, name, path?, dirty, active}]: `id` names the file in a control or MCP call's `document`; `path` only for the user's own scripts, not AI agents or plugins",
+            false,
+            |s, _| {
+                // Where the files are on disk is the user's: an agent gets their names (#1117).
+                let paths = s.agent.is_none();
+                Ok(Value::Array(
+                    s.docs
+                        .iter()
+                        .enumerate()
+                        .map(|(i, d)| {
+                            let mut e = json!({"index": i, "id": d.uid, "name": d.doc.name, "dirty": d.is_dirty(), "active": i == s.active});
+                            if paths {
+                                e["path"] = json!(d.path);
+                            }
+                            e
+                        })
+                        .collect(),
+                ))
+            }
+        ),
         spec!("doc.home", "Home", "{}", false, |s, _| {
             s.request_ui("home", json!({}));
             ok()

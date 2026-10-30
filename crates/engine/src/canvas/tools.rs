@@ -236,7 +236,7 @@ pub struct PointerEvent {
 }
 
 /// The pointer is still within [`DRAG_SLOP_PX`] of where it was pressed.
-fn within_slop(ev: &PointerEvent, start: Point) -> bool {
+pub(crate) fn within_slop(ev: &PointerEvent, start: Point) -> bool {
     (ev.p() - start).hypot() * ev.zoom.max(1e-6) < DRAG_SLOP_PX
 }
 
@@ -336,6 +336,9 @@ pub struct Overlay {
     pub rubber_handle: Option<[f64; 2]>,
     /// Frame/section the pointer is drawing or dropping into (highlighted).
     pub drop_target: Option<NodeId>,
+    /// Connector tool: the attach points (side middles, page x, y) of the object under the pointer,
+    /// and whether the connector end is at each.
+    pub attach: Vec<([f64; 2], bool)>,
     /// Auto layout insertion indicator (x0, y0, x1, y1).
     pub insert_line: Option<[f64; 4]>,
     /// The instance an Alt-drop of a component from the Assets panel would swap (highlighted).
@@ -554,6 +557,9 @@ pub struct ToolState {
     pub dev_mode: bool,
     /// Pen snap targets, kept while hovering (see `vectoredit::point_snap`).
     pub(crate) pen_targets: Option<crate::vectoredit::point_snap::PenTargets>,
+    /// Vector edit mode's pen: where the last press that started something new (no path being
+    /// drawn) was, and the undo depth before it, so a double-click there takes that edit back.
+    pub(crate) pen_press: Option<(Point, usize)>,
     /// The Scale tool's anchor: column and row (0 start, 1 middle, 2 end) of the point of the
     /// selection box that stays put (`tool.scaleAnchor`).
     pub scale_anchor: (u8, u8),

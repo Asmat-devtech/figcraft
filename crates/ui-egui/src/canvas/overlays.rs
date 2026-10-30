@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
 use super::builder::{builder_overlay, hatched, region_hatch};
-use super::outline::{TextOnScreen, draw_outline, node_quad, outline_colour, quad, slot_badges, stroke, swap_highlight};
+use super::outline::{TextOnScreen, draw_outline, node_quad, outline_colour, outline_shapes, quad, slot_badges, stroke, swap_highlight};
 use super::rulers::{boards, fmt, rulers};
 use super::{
     Align2, COMPONENT, Color32, CornerRadius, Document, FigApp, NodeId, NodeKind, Point, Pos2, Rect, Shape, Stroke, StrokeKind, Tokens, ToolId,
@@ -71,6 +73,7 @@ pub(super) fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec
         quad(painter, q, stroke(if figcraft_engine::components::is_slot(&doc, d) { COMPONENT } else { accent(painter) }, 1.0));
     }
     slot_badges(app, painter, &doc, &sel, ov.drop_target);
+    attach_points(app, painter, &ov.attach);
     if let Some(t) = ov.swap_target {
         swap_highlight(app, painter, &doc, t);
     }
@@ -233,20 +236,51 @@ fn text_edit_overlay(app: &FigApp, painter: &egui::Painter, t: &Tokens, doc: &Do
     painter.ctx().request_repaint_after(std::time::Duration::from_millis(500));
 }
 
+/// What the selection's overlay draws that only the document, the selection, the view and the
+/// overlay colour decide: kept for the frames that show the same ([`crate::selection_cache`]).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct SelectionGeometry {
+    /// The outline colour: the component colour when any selected layer is in one.
+    pub(super) col: Color32,
+    /// Every selected layer's outline on screen.
+    pub(super) outlines: Arc<Vec<Shape>>,
+    /// The transform box (page space) and its width and height.
+    bbox: Option<[Point; 4]>,
+    size: Option<(f64, f64)>,
+    /// A selected layer is locked (no handles).
+    locked: bool,
+}
+
+pub(super) fn selection_geometry(app: &FigApp, painter: &egui::Painter, doc: &Arc<Document>, sel: &[NodeId]) -> SelectionGeometry {
+    let green = accent(painter);
+    let mapping = [app.to_screen(0.0, 0.0), app.to_screen(1.0, 1.0)].map(crate::selection_cache::bits);
+    let extra = [mapping[0][0], mapping[0][1], mapping[1][0], mapping[1][1], u64::from(u32::from_le_bytes(green.to_array()))];
+    crate::selection_cache::cached(painter.ctx(), "selection overlay", doc, sel, &extra, || {
+        let col = if sel.iter().any(|i| outline_colour(doc, *i, green) == COMPONENT) { COMPONENT } else { green };
+        let outlines = sel.iter().flat_map(|id| outline_shapes(app, doc, *id, stroke(col, 1.0))).collect();
+        SelectionGeometry {
+            col,
+            outlines: Arc::new(outlines),
+            bbox: selection_box(doc, sel),
+            size: selection_frame(doc, sel).map(|(_, w, h)| (w, h)),
+            locked: sel.iter().any(|i| figcraft_engine::tools::locked_in(doc, *i)),
+        }
+    })
+}
+
 /// The selection's outlines, transform box and handles; returns the size label's box.
 fn selection_overlay(
     app: &FigApp,
     painter: &egui::Painter,
     ds: &figcraft_engine::DocState,
-    doc: &Document,
+    doc: &Arc<Document>,
     sel: &[NodeId],
     zoom: f64,
 ) -> Option<Rect> {
     let mut size_label = None;
-    let col = if sel.iter().any(|i| outline_colour(doc, *i, accent(painter)) == COMPONENT) { COMPONENT } else { accent(painter) };
-    for id in sel {
-        draw_outline(app, painter, doc, *id, stroke(col, 1.0));
-    }
+    let geo = selection_geometry(app, painter, doc, sel);
+    let col = geo.col;
+    painter.extend(geo.outlines.iter().cloned());
     // Constraint guides belong to the normal selection overlay: not while the Shape Builder
     // reshapes by regions, nor while measuring to another layer (Alt), whose lines take over.
     if app.session.tool.tool != ToolId::ShapeBuilder && app.session.tool.overlay.measure_box.is_none() {
@@ -254,8 +288,8 @@ fn selection_overlay(
     }
     // The shape builder reshapes by regions: no transform box.
     if app.session.tool.tool != ToolId::ShapeBuilder
-        && let Some(b) = selection_box(doc, sel)
-        && let Some((_, w, h)) = selection_frame(doc, sel)
+        && let Some(b) = geo.bbox
+        && let Some((w, h)) = geo.size
     {
         let is_line = sel.len() == 1 && matches!(sel.first().and_then(|i| doc.node(*i)).map(|n| &n.kind), Some(NodeKind::Line));
         // A selected connector's handles are its two ends (drag one onto another object).
@@ -272,16 +306,17 @@ fn selection_overlay(
         let measuring = app.session.tool.overlay.measure_box.is_some();
         // Locked layers (selected in the layers panel) can't be resized, nor anything in Dev
         // Mode: no handles either.
-        let handles =
-            if measuring || app.session.tool.dev_mode || connector.is_some() || sel.iter().any(|i| figcraft_engine::tools::locked_in(doc, *i)) {
-                0
-            } else if is_line {
-                2
-            } else if tiny {
-                0
-            } else {
-                4
-            };
+        // Crop mode draws its own marks on the box instead (`handles::crop_marks`).
+        let cropping = app.ui.crop.is_some();
+        let handles = if cropping || measuring || app.session.tool.dev_mode || connector.is_some() || geo.locked {
+            0
+        } else if is_line {
+            2
+        } else if tiny {
+            0
+        } else {
+            4
+        };
         size_label = transform_box(
             app,
             painter,
@@ -296,7 +331,7 @@ fn selection_overlay(
             painter.circle_filled(c, 5.0, Color32::WHITE);
             painter.circle_stroke(c, 5.0, stroke(col, 1.5));
         }
-        if !measuring {
+        if !measuring && !cropping {
             arc_overlay(app, painter, col);
             shape_overlay(app, painter, col);
         }
@@ -325,6 +360,18 @@ fn selection_overlay(
         }
     }
     size_label
+}
+
+/// The connector tool's attach points on the object under the pointer; the one its end is at is a
+/// larger see-through ring, so the end's cap shows inside it.
+fn attach_points(app: &FigApp, painter: &egui::Painter, points: &[([f64; 2], bool)]) {
+    let col = accent(painter);
+    for ([x, y], on) in points {
+        let c = app.to_screen(*x, *y);
+        let (r, fill) = if *on { (7.0, col.gamma_multiply(0.25)) } else { (4.0, Color32::WHITE) };
+        painter.circle_filled(c, r, fill);
+        painter.circle_stroke(c, r, stroke(col, 1.5));
+    }
 }
 
 fn pen_overlay(app: &FigApp, painter: &egui::Painter, zoom: f64) {
@@ -363,7 +410,8 @@ fn pen_overlay(app: &FigApp, painter: &egui::Painter, zoom: f64) {
             }
         }
     } else if let Some([x0, y0, x1, y1]) = ov.rubber {
-        // A connector being drawn, or one of its ends dragged: from where it starts to the pointer.
+        // A selected connector's end being dragged: from its other end to the pointer (one being
+        // drawn shows itself, previewed in the document).
         painter.line_segment([app.to_screen(x0, y0), app.to_screen(x1, y1)], stroke(accent(painter), 1.5));
     }
 }

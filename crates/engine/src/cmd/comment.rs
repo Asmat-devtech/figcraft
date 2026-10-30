@@ -1,12 +1,13 @@
 //! Comments: add, reply, edit, react, resolve, read state, delete, find and reveal comment threads.
 //!
 //! Messages are addressed by `reply` (an index into the replies; omitted: the thread's first
-//! message). `author` is who is acting (default: the name from Preferences, `pref.userName`): only
-//! a message's author edits or deletes it, and only the thread's author deletes the thread.
+//! message). `author` is who is acting (default: the AI agent the command runs for, else the name
+//! from Preferences, `pref.userName`): only a message's author edits or deletes it, and only the
+//! thread's author deletes the thread.
 
 use std::fmt::Write as _;
 
-use figcraft_doc::{Comment, Document, Message, Node, NodeId, NodeKind, geom};
+use figcraft_doc::{Comment, Document, Message, Node, NodeId, NodeKind, geom, mentions};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, ok};
@@ -15,6 +16,12 @@ use crate::{Session, bad, spec};
 
 /// The name comments are signed with until the user sets theirs.
 pub const DEFAULT_AUTHOR: &str = "You";
+
+/// The name of an AI agent that gave none.
+pub const DEFAULT_AGENT: &str = "AI agent";
+
+/// Most characters of an agent's own name in its comments.
+const MAX_AGENT_NAME: usize = 64;
 
 /// Links to a thread: `figcraft://comment/<id>`.
 const LINK_PREFIX: &str = "figcraft://comment/";
@@ -260,9 +267,27 @@ pub fn user_name(s: &Session) -> String {
     if n.is_empty() { DEFAULT_AUTHOR.into() } else { n.to_string() }
 }
 
-/// Who is acting: `author` from the params, else the user.
+/// How an AI agent's comments are signed: its client's name, marked so it never reads as a
+/// person's ("Claude" → "Claude (agent)"), or [`DEFAULT_AGENT`] when it gave none.
+pub fn agent_author(name: &str) -> String {
+    let n: String = name.chars().filter(|c| !c.is_control()).collect();
+    let n: String = n.trim().chars().take(MAX_AGENT_NAME).collect();
+    if n.is_empty() { DEFAULT_AGENT.into() } else { format!("{n} (agent)") }
+}
+
+/// Who acts when no `author` is given: the AI agent the command runs for, else the user.
+pub fn acting_name(s: &Session) -> String {
+    s.agent.clone().unwrap_or_else(|| user_name(s))
+}
+
+/// Who is acting: `author` from the params, else [`acting_name`].
 fn author(s: &Session, p: &Value) -> String {
-    string(p, "author").map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).unwrap_or_else(|| user_name(s))
+    string(p, "author").map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).unwrap_or_else(|| acting_name(s))
+}
+
+/// A new message by `who`, marked as an agent's when the command runs for one.
+fn new_message(s: &Session, who: String, text: String) -> Message {
+    Message { agent: s.agent.is_some(), ..Message::new(who, text, now_secs()) }
 }
 
 fn text(cmd: &str, p: &Value) -> crate::Result<String> {
@@ -301,25 +326,104 @@ fn local(doc: &Document, anchor: Option<NodeId>, x: f64, y: f64) -> (f64, f64) {
     }
 }
 
-fn message_json(m: &Message) -> Value {
+/// The names an @mention resolves to: the file's people (`Document::comment_people`) and `user`,
+/// as the thread view highlights them.
+fn mentionable<'a>(people: &'a [String], user: &'a str) -> Vec<&'a str> {
+    people.iter().map(String::as_str).chain([user]).collect()
+}
+
+/// The names `text` @mentions by the rule the thread view highlights them with
+/// ([`figcraft_doc::mentions`]), and whether each is one of `people` (else it is the letters and
+/// digits after the `@`).
+fn mentioned<'a>(text: &'a str, people: &[&'a str]) -> impl Iterator<Item = (&'a str, bool)> {
+    mentions(text, people).into_iter().map(move |(r, who)| (who.or_else(|| text.get(r.start + 1..r.end)).unwrap_or_default(), who.is_some()))
+}
+
+/// Whether a message of `c` @mentions `name` (any case), as `comment.list` reports mentions;
+/// `name` resolves like one of `people`, so a name nobody in the file has can be several words.
+fn thread_mentions(c: &Comment, people: &[&str], name: &str) -> bool {
+    let people: Vec<&str> = people.iter().copied().chain([name]).collect();
+    c.messages().any(|m| mentioned(&m.text, &people).any(|(n, _)| n.eq_ignore_ascii_case(name)))
+}
+
+/// A list's `mentions` filter: a name (a leading `@` is fine), or none.
+fn mentions_param(cmd: &str, p: &Value) -> crate::Result<Option<String>> {
+    match get(p, "mentions") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) if !s.trim().trim_start_matches('@').trim().is_empty() => {
+            Ok(Some(s.trim().trim_start_matches('@').trim().to_string()))
+        }
+        Some(_) => Err(bad(cmd, "`mentions` must be a name")),
+    }
+}
+
+/// The threads a list's params pick (`list_params`, `frame`, `mentions`), in list order, as
+/// `who` sees them; mentions resolve against `people` (`mentionable`).
+fn listed<'s>(cmd: &str, s: &'s Session, p: &Value, who: &str, people: &[&str]) -> crate::Result<Vec<&'s Comment>> {
+    let (page, filter, sort, text) = list_params(cmd, s, p)?;
+    let want = mentions_param(cmd, p)?;
+    let q = Query { page, frame: id(p, "frame"), filter, sort, text: &text };
+    Ok(query(s.doc()?, &q, who).into_iter().filter(|c| want.as_deref().is_none_or(|w| thread_mentions(c, people, w))).collect())
+}
+
+/// Add the names `text` @mentions to `named` as `{name, known, you}`, each once.
+fn push_mentions(named: &mut Vec<Value>, text: &str, people: &[&str], user: &str) {
+    for (name, known) in mentioned(text, people) {
+        let v = json!({"name": name, "known": known, "you": known && name.eq_ignore_ascii_case(user)});
+        if !named.contains(&v) {
+            named.push(v);
+        }
+    }
+}
+
+/// The most mentions `comment.prompt` lists for one thread (its list stays bounded).
+const PROMPT_MAX_MENTIONS: usize = 32;
+
+/// `comment.people`: everyone who wrote or reacted in a comment, and every name a message
+/// @mentions (as `comment.list` reports it), once each in any case, sorted as
+/// `Document::comment_people` sorts.
+fn people_and_mentioned(doc: &Document, you: &str) -> Vec<String> {
+    let people = doc.comment_people();
+    let resolve = mentionable(&people, you);
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<String> = Vec::new();
+    let names = people
+        .iter()
+        .map(String::as_str)
+        .chain(doc.comments.iter().flat_map(Comment::messages).flat_map(|m| mentioned(&m.text, &resolve).map(|(n, _)| n)));
+    for name in names {
+        if seen.insert(name.to_lowercase()) {
+            out.push(name.to_string());
+        }
+    }
+    out.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| a.cmp(b)));
+    out
+}
+
+/// A message as JSON, with the names it @mentions: `{name, known, you}` each, resolved against
+/// `people` (`mentionable`); `known: false` is a name nobody in the file has.
+fn message_json(m: &Message, people: &[&str], user: &str) -> Value {
+    let mut named: Vec<Value> = Vec::new();
+    push_mentions(&mut named, &m.text, people, user);
     json!({
-        "author": m.author, "text": m.text, "created": m.created, "edited": m.edited,
+        "author": m.author, "agent": m.agent, "text": m.text, "created": m.created, "edited": m.edited,
         "reactions": m.reactions.iter().map(|r| json!({"emoji": r.emoji, "users": r.users})).collect::<Vec<_>>(),
+        "mentions": named,
     })
 }
 
 /// JSON view of a comment as `user` sees it: its page position, frame, read state and link, the
-/// first message's fields, and the replies.
-pub fn comment_json(doc: &Document, c: &Comment, user: &str) -> Value {
+/// first message's fields, and the replies; mentions resolve against `people` (`mentionable`).
+pub fn comment_json(doc: &Document, c: &Comment, user: &str, people: &[&str]) -> Value {
     let (x, y) = c.position(doc);
     let frame = frame_of(doc, c);
-    let mut v = message_json(&c.first);
+    let mut v = message_json(&c.first, people, user);
     let extra = json!({
         "id": c.id, "page": c.page, "pageName": doc.node(c.page).map(|n| n.name.as_str()),
         "x": x, "y": y, "anchor": c.anchor,
         "frame": frame, "frameName": frame.and_then(|f| doc.node(f)).map(|n| n.name.as_str()),
         "resolved": c.resolved, "unread": c.is_unread(user), "link": link(c.id),
-        "replies": c.replies.iter().map(message_json).collect::<Vec<_>>(),
+        "replies": c.replies.iter().map(|m| message_json(m, people, user)).collect::<Vec<_>>(),
     });
     if let (Some(m), Value::Object(e)) = (v.as_object_mut(), extra) {
         m.extend(e);
@@ -329,17 +433,31 @@ pub fn comment_json(doc: &Document, c: &Comment, user: &str) -> Value {
 
 /// Bounded metadata for `comment.prompt`'s `comments` list. Full messages and replies stay in
 /// `comment.list`; a prompt over thousands of threads must not repeat all of them here.
-fn comment_brief_json(doc: &Document, c: &Comment, user: &str) -> Value {
+fn comment_brief_json(doc: &Document, c: &Comment, user: &str, people: &[&str]) -> Value {
     let (x, y) = c.position(doc);
     let frame = frame_of(doc, c);
+    // The names the whole thread @mentions, as `comment.list` reports them per message.
+    let mut named = Vec::new();
+    for m in c.messages() {
+        push_mentions(&mut named, &m.text, people, user);
+        if named.len() >= PROMPT_MAX_MENTIONS {
+            break;
+        }
+    }
+    named.truncate(PROMPT_MAX_MENTIONS);
+    for v in &mut named {
+        if let Some(name) = v.get("name").and_then(Value::as_str).map(|n| clip_chars(n, 80)) {
+            v["name"] = json!(name);
+        }
+    }
     json!({
         "id": c.id, "page": c.page,
         "pageName": doc.node(c.page).map(|n| clip_chars(&n.name, 80)),
         "x": x, "y": y, "anchor": c.anchor,
         "frame": frame, "frameName": frame.and_then(|f| doc.node(f)).map(|n| clip_chars(&n.name, 80)),
         "resolved": c.resolved, "unread": c.is_unread(user), "link": link(c.id),
-        "author": clip_chars(&c.first.author, 80), "preview": clip_chars(&c.first.text, 160),
-        "replies": c.replies.len(),
+        "author": clip_chars(&c.first.author, 80), "agent": c.first.agent, "preview": clip_chars(&c.first.text, 160),
+        "replies": c.replies.len(), "mentions": named,
     })
 }
 
@@ -385,7 +503,8 @@ fn open(s: &mut Session, id: u64, how: &str, who: &str) -> crate::Result<Value> 
     s.request_ui("comment.open", json!({"id": id}));
     let doc = s.doc()?;
     let c = doc.comment(id).ok_or_else(|| bad("comment.open", "no comment"))?;
-    Ok(comment_json(doc, c, who))
+    let people = doc.comment_people();
+    Ok(comment_json(doc, c, who, &mentionable(&people, who)))
 }
 
 /// A list's page (None: every page), filter, sort and search text from params.
@@ -565,7 +684,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     x: lx,
                     y: ly,
                     anchor,
-                    first: Message::new(who.clone(), text, now_secs()),
+                    first: new_message(s, who.clone(), text),
                     resolved: false,
                     replies: Vec::new(),
                     read_by: None,
@@ -579,7 +698,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("comment.reply", "Reply to comment", "{id | link, text, author?}", true, |s, p| {
             let id = req_comment("comment.reply", s, p)?;
             let who = author(s, p);
-            let r = Message::new(who.clone(), text("comment.reply", p)?, now_secs());
+            let r = new_message(s, who.clone(), text("comment.reply", p)?);
             let c = s.doc_mut()?.comment_mut(id).ok_or_else(|| bad("comment.reply", "no comment"))?;
             c.replies.push(r);
             c.resolved = false;
@@ -717,15 +836,13 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "comment.next",
             "Next comment",
-            "{id? (the thread to step from; omitted: the first or last), dir? (1 next, -1 previous; default 1), page?, filter?, sort?, query?, frame?, resolved? (the list, as comment.list), author?}",
+            "{id? (the thread to step from; omitted: the first or last), dir? (1 next, -1 previous; default 1), page?, filter?, sort?, query?, frame?, resolved?, mentions? (the list, as comment.list), author?}  → the thread, as comment.list lists it",
             false,
             |s, p| {
                 let dir = num(p, "dir").unwrap_or(1.0);
-                let doc = s.doc()?;
                 let who = author(s, p);
-                let (page, filter, sort, text) = list_params("comment.next", s, p)?;
-                let ids: Vec<u64> =
-                    query(doc, &Query { page, frame: id(p, "frame"), filter, sort, text: &text }, &who).iter().map(|c| c.id).collect();
+                let people = s.doc()?.comment_people();
+                let ids: Vec<u64> = listed("comment.next", s, p, &who, &mentionable(&people, &who))?.iter().map(|c| c.id).collect();
                 let at = id(p, "id").and_then(|i| ids.iter().position(|x| *x == i.0));
                 let next = match at {
                     Some(i) if dir < 0.0 => ids.get(i.saturating_sub(1)),
@@ -758,18 +875,28 @@ pub fn specs() -> Vec<CommandSpec> {
             let id = req_comment("comment.link", s, p)?;
             Ok(json!({"link": link(id)}))
         }),
-        spec!("comment.people", "People in comments", "{}", false, |s, _| { Ok(json!({"people": s.doc()?.comment_people(), "you": user_name(s)})) }),
+        spec!(
+            "comment.people",
+            "People in comments",
+            "{}  → {people (everyone who wrote or reacted in a comment, and every name a message @mentions), you}",
+            false,
+            |s, _| {
+                let you = acting_name(s);
+                Ok(json!({"people": people_and_mentioned(s.doc()?, &you), "you": you}))
+            }
+        ),
         spec!(
             "comment.list",
             "List comments",
-            "{page? (default: current; \"all\" for every page), filter? (all|open|resolved|mine|unread; default all), sort? (date|page; default date), query? (search text), frame? (a top-level frame id), resolved? (false hides resolved ones), author? (whose threads and read state)}",
+            "{page? (default: current; \"all\" for every page), filter? (all|open|resolved|mine|unread; default all), sort? (date|page; default date), query? (search text), frame? (a top-level frame id), resolved? (false hides resolved ones), author? (whose threads and read state), mentions? (a name, any case: only threads where a message @mentions it, as each message's `mentions` reports)}",
             false,
             |s, p| {
                 let doc = s.doc()?;
-                let (page, filter, sort, text) = list_params("comment.list", s, p)?;
                 let who = author(s, p);
-                let q = Query { page, frame: id(p, "frame"), filter, sort, text: &text };
-                let list: Vec<Value> = query(doc, &q, &who).into_iter().map(|c| comment_json(doc, c, &who)).collect();
+                let people = doc.comment_people();
+                let people = mentionable(&people, &who);
+                let list: Vec<Value> =
+                    listed("comment.list", s, p, &who, &people)?.into_iter().map(|c| comment_json(doc, c, &who, &people)).collect();
                 Ok(json!({"comments": list}))
             }
         ),
@@ -817,7 +944,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     Some(_) => return Err(bad("comment.prompt", "`ids` must be an array of comment ids")),
                 };
-                let who = user_name(s);
+                let who = acting_name(s);
                 let selected: Vec<&Comment> = if let Some(ids) = ids {
                     let mut out = Vec::with_capacity(ids.len());
                     for id in ids {
@@ -830,7 +957,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 };
                 let count = selected.len();
                 let (text, truncated) = prompt_text(doc, path.as_deref(), &selected);
-                let comments: Vec<Value> = selected.iter().take(PROMPT_MAX_THREADS).map(|c| comment_brief_json(doc, c, &who)).collect();
+                let people = doc.comment_people();
+                let people = mentionable(&people, &who);
+                let comments: Vec<Value> = selected.iter().take(PROMPT_MAX_THREADS).map(|c| comment_brief_json(doc, c, &who, &people)).collect();
                 Ok(json!({"count": count, "truncated": truncated, "text": text, "comments": comments}))
             }
         ),

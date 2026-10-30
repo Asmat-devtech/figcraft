@@ -183,12 +183,15 @@ impl<'a> View<'a> {
         v
     }
 
-    /// This view with `style` just above the node itself: the style beats the node's own copy of
-    /// its fields (stale when the style changed since), and override rows beat both.
-    fn styled(&self, style: Option<&'a Kv<'a>>) -> Self {
+    /// This view with `style` just above the layer that links it in `key` (or `legacy`): the style
+    /// beats that layer's and lower layers' copies of its fields (stale when the style changed
+    /// since, or written for the style linked before), and override rows above the link beat it.
+    fn styled(&self, style: Option<&'a Kv<'a>>, key: &str, legacy: &str) -> Self {
         let mut v = self.clone();
         if let Some(s) = style {
-            v.layers.insert(v.layers.len().min(1), s);
+            let linked_in = |k: &str| v.layers.iter().rposition(|l| l.get(k).is_some());
+            let at = linked_in(key).or_else(|| linked_in(legacy)).map_or(1, |i| i + 1);
+            v.layers.insert(at.min(v.layers.len()), s);
         }
         v
     }
@@ -283,8 +286,12 @@ impl<'a> Mapper<'a> {
             if !nodes.get(&id).is_some_and(|latest| std::ptr::eq(*latest, n)) {
                 continue;
             }
+            // Variables and their collections are read from the node list (`of_type`), never
+            // as layers: out of the layer tree, an instance's expansion doesn't walk them again for
+            // every instance without counting them (#1077).
             if let Some(p) = n.get("parentIndex")
                 && let Some(parent) = p.get("guid").and_then(guid)
+                && !matches!(n.get("type").and_then(Kv::str), Some("VARIABLE" | "VARIABLE_SET"))
             {
                 kids.entry(parent).or_default().push((p.get("position").and_then(Kv::str).unwrap_or(""), id.clone()));
             }
