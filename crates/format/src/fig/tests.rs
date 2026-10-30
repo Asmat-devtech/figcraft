@@ -795,6 +795,233 @@ fn hashes_naming_one_blob_share_one_copy_of_it() {
     assert_eq!(*copies[&"63".repeat(20)], [7; 16]);
 }
 
+mod image_budget {
+    use super::*;
+
+    fn image(hash: u8) -> Vec<u8> {
+        let img = image::RgbaImage::from_pixel(2, 1, image::Rgba([hash, 0, 0, 255]));
+        let mut out = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+        out
+    }
+
+    fn file(references: &[u8], members: &[(u8, Vec<u8>)]) -> Vec<u8> {
+        let mut nodes = vec![node(0, None, "DOCUMENT", "Document", vec![]), node(1, Some((0, "!")), "CANVAS", "Page", vec![])];
+        for (i, hash) in references.iter().enumerate() {
+            nodes.push(node(
+                i as u64 + 2,
+                Some((1, &format!("{i:04}"))),
+                "RECTANGLE",
+                &format!("Image {i}"),
+                vec![
+                    ("size", xy(10.0, 10.0)),
+                    ("fillPaints", arr(vec![o(vec![("type", e("IMAGE")), ("image", o(vec![("hash", Kv::Bytes(vec![*hash; 20]))]))])])),
+                ],
+            ));
+        }
+        let canvas = canvas(&schema(), &o(vec![("nodeChanges", arr(nodes))]));
+        let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let deflated = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        z.start_file("canvas.fig", deflated).unwrap();
+        z.write_all(&canvas).unwrap();
+        for (hash, bytes) in members {
+            z.start_file(format!("images/{}", format!("{hash:02x}").repeat(20)), deflated).unwrap();
+            z.write_all(bytes).unwrap();
+        }
+        z.finish().unwrap().into_inner()
+    }
+
+    fn bytes(doc: &Document, index: usize) -> &[u8] {
+        let node = named(doc, &format!("Image {index}"));
+        let figcraft_doc::color::PaintKind::Image(fill) = &node.fills[0].kind else { panic!("not an image fill") };
+        &doc.images[&fill.image].bytes
+    }
+
+    fn budget_warnings(warnings: &[String]) -> Vec<&str> {
+        warnings.iter().filter(|w| w.contains("total ZIP image byte budget")).map(String::as_str).collect()
+    }
+
+    fn change_member_field(zip: &mut [u8], hash: u8, offset: usize, value: u32) {
+        let start = {
+            let mut z = zip::ZipArchive::new(std::io::Cursor::new(&*zip)).unwrap();
+            z.by_name(&format!("images/{}", format!("{hash:02x}").repeat(20))).unwrap().central_header_start() as usize
+        };
+        zip[start + offset..start + offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    #[test]
+    fn exact_total_limit_keeps_all_images_and_each_import_gets_its_own_budget() {
+        let members = [(1, image(1)), (2, image(2))];
+        let limit = members.iter().map(|(_, b)| b.len() as u64).sum();
+        let zip = file(&[1, 2], &members);
+        for _ in 0..2 {
+            let (doc, warnings) = import_with_image_limit(&zip, "Images", limit).unwrap();
+            assert_eq!(bytes(&doc, 0), members[0].1);
+            assert_eq!(bytes(&doc, 1), members[1].1);
+            assert!(warnings.is_empty(), "{warnings:?}");
+        }
+    }
+
+    #[test]
+    fn individually_acceptable_images_overflow_the_total_and_leave_placeholders() {
+        let members = [(1, image(1)), (2, image(2))];
+        let limit = members.iter().map(|(_, b)| b.len() as u64).sum::<u64>() - 1;
+        assert!(members.iter().all(|(_, b)| b.len() as u64 <= limit));
+        let (doc, warnings) = import_with_image_limit(&file(&[1, 2], &members), "Images", limit).unwrap();
+        assert_eq!(bytes(&doc, 0), members[0].1);
+        assert_ne!(bytes(&doc, 1), members[1].1);
+        assert!(!doc.images.contains_key(&crate::image_hash(&members[1].1)));
+        let notes = budget_warnings(&warnings);
+        assert_eq!(notes.len(), 1, "{warnings:?}");
+        assert!(notes[0].contains("1 ZIP image") && notes[0].contains(&limit.to_string()), "{warnings:?}");
+    }
+
+    #[test]
+    fn repeated_references_do_not_charge_or_count_a_rejection_twice() {
+        let members = [(1, image(1)), (2, image(2))];
+        let (doc, warnings) = import_with_image_limit(&file(&[1, 1, 2, 2, 1], &members), "Images", members[0].1.len() as u64).unwrap();
+        for i in [0, 1, 4] {
+            assert_eq!(bytes(&doc, i), members[0].1);
+        }
+        assert_eq!(bytes(&doc, 2), bytes(&doc, 3));
+        assert_ne!(bytes(&doc, 2), members[1].1);
+        let notes = budget_warnings(&warnings);
+        assert_eq!(notes.len(), 1, "{warnings:?}");
+        assert!(notes[0].contains("1 ZIP image"), "{warnings:?}");
+    }
+
+    #[test]
+    fn distinct_members_with_identical_contents_still_use_the_read_budget() {
+        let png = image(1);
+        let members = [(1, png.clone()), (2, png.clone())];
+        let (doc, warnings) = import_with_image_limit(&file(&[1, 2], &members), "Images", png.len() as u64).unwrap();
+        assert_eq!(bytes(&doc, 0), png);
+        assert_ne!(bytes(&doc, 1), png);
+        assert_eq!(budget_warnings(&warnings).len(), 1, "{warnings:?}");
+    }
+
+    #[test]
+    fn rejecting_a_member_before_reading_leaves_room_for_a_smaller_one() {
+        let png = image(1);
+        let members = [(1, vec![0; png.len() + 1]), (2, png.clone())];
+        let (doc, warnings) = import_with_image_limit(&file(&[1, 2], &members), "Images", png.len() as u64).unwrap();
+        assert_ne!(bytes(&doc, 0), members[0].1);
+        assert_eq!(bytes(&doc, 1), png);
+        assert_eq!(budget_warnings(&warnings).len(), 1, "{warnings:?}");
+    }
+
+    #[test]
+    fn failed_crc_reads_still_consume_the_bytes_read() {
+        let members = [(1, image(1)), (2, image(2))];
+        let mut zip = file(&[1, 2], &members);
+        change_member_field(&mut zip, 1, 16, 0);
+        let (doc, warnings) = import_with_image_limit(&zip, "Images", members[0].1.len() as u64 + 1).unwrap();
+        assert_ne!(bytes(&doc, 0), members[0].1);
+        assert_ne!(bytes(&doc, 1), members[1].1);
+        assert_eq!(budget_warnings(&warnings).len(), 1, "{warnings:?}");
+    }
+
+    #[test]
+    fn a_truncated_deflate_read_keeps_its_partial_charge() {
+        let members = [(1, image(1)), (2, image(2))];
+        let mut zip = file(&[1, 2], &members);
+        // Shorten the first member's compressed size, cutting its deflate stream mid-image.
+        change_member_field(&mut zip, 1, 20, 15);
+        let limit = members[0].1.len() as u64;
+        let archive = Archive::open(&zip).unwrap();
+        archive.image_budget.remaining.set(limit);
+        assert!(archive.image(&"01".repeat(20)).is_none());
+        let remaining = archive.image_budget.remaining.get();
+        assert!(remaining > 0 && remaining < limit, "partial read left {remaining} of {limit} bytes");
+        assert!(archive.image(&"02".repeat(20)).is_none());
+        assert_eq!(archive.image_budget.remaining.get(), remaining);
+        let (doc, warnings) = import_with_image_limit(&zip, "Images", limit).unwrap();
+        assert_ne!(bytes(&doc, 1), members[1].1);
+        assert_eq!(budget_warnings(&warnings).len(), 1, "{warnings:?}");
+    }
+
+    #[test]
+    fn the_individual_image_cap_is_preserved_without_reading_a_large_member() {
+        let members = [(1, image(1)), (2, image(2))];
+        let mut zip = file(&[1, 2], &members);
+        change_member_field(&mut zip, 1, 24, (MAX_IMAGE + 1) as u32);
+        let (doc, warnings) = import_with_image_limit(&zip, "Images", members[1].1.len() as u64).unwrap();
+        assert_ne!(bytes(&doc, 0), members[0].1);
+        assert_eq!(bytes(&doc, 1), members[1].1);
+        assert!(budget_warnings(&warnings).is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn crc_is_checked_even_when_the_read_ends_exactly_at_the_budget() {
+        let members = [(1, image(1))];
+        let mut zip = file(&[1], &members);
+        change_member_field(&mut zip, 1, 16, 0);
+        let (doc, warnings) = import_with_image_limit(&zip, "Images", members[0].1.len() as u64).unwrap();
+        assert_ne!(bytes(&doc, 0), members[0].1);
+        assert!(warnings.iter().any(|w| w.contains("isn't in the file")), "{warnings:?}");
+        assert!(budget_warnings(&warnings).is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn an_understated_size_cannot_read_past_the_remaining_budget() {
+        let members = [(1, image(1)), (2, image(2))];
+        let mut zip = file(&[1, 2], &members);
+        change_member_field(&mut zip, 1, 24, 1);
+        let archive = Archive::open(&zip).unwrap();
+        archive.image_budget.remaining.set(members[0].1.len() as u64 - 1);
+        assert!(archive.image(&"01".repeat(20)).is_none());
+        assert_eq!(archive.image_budget.remaining.get(), 0);
+        assert_eq!(archive.image_budget.skipped.get(), 1);
+        assert!(archive.image(&"02".repeat(20)).is_none());
+        assert_eq!(archive.image_budget.remaining.get(), 0);
+        assert_eq!(archive.image_budget.skipped.get(), 2);
+    }
+
+    #[test]
+    fn invalid_image_contents_are_charged_before_image_validation() {
+        let members = [(1, vec![0; 8]), (2, image(2))];
+        let limit = members[1].1.len() as u64 + 7;
+        let (doc, warnings) = import_with_image_limit(&file(&[1, 2], &members), "Images", limit).unwrap();
+        assert_ne!(bytes(&doc, 1), members[1].1);
+        assert_eq!(budget_warnings(&warnings).len(), 1, "{warnings:?}");
+    }
+
+    #[test]
+    fn missing_and_unreferenced_members_do_not_consume_the_budget() {
+        let members = [(1, image(1)), (2, vec![0; 128])];
+        let (doc, warnings) = import_with_image_limit(&file(&[9, 1], &members), "Images", members[0].1.len() as u64).unwrap();
+        assert_eq!(bytes(&doc, 1), members[0].1);
+        assert!(warnings.iter().any(|w| w.contains("isn't in the file")), "{warnings:?}");
+        assert!(budget_warnings(&warnings).is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn embedded_image_fallback_is_independent_of_the_zip_budget() {
+        let canvas = canvas(&schema(), &message_with_image_in_blobs(0));
+        for bytes in [&canvas, &zip_file(&canvas)] {
+            let (doc, warnings) = import_with_image_limit(bytes, "Images", 0).unwrap();
+            let photo = named(&doc, "Photo");
+            let figcraft_doc::color::PaintKind::Image(fill) = &photo.fills[0].kind else { panic!("not an image fill") };
+            assert_eq!(*doc.images[&fill.image].bytes, png());
+            assert!(!warnings.iter().any(|w| w.contains("isn't in the file")), "{warnings:?}");
+            assert_eq!(budget_warnings(&warnings).len(), usize::from(bytes.starts_with(b"PK")), "{warnings:?}");
+        }
+    }
+
+    #[test]
+    fn default_import_preserves_image_bytes_dimensions_and_existing_warnings() {
+        let members = [(1, image(1)), (2, image(2))];
+        let (doc, warnings) = import(&file(&[1, 2], &members), "Images").unwrap();
+        assert_eq!(bytes(&doc, 0), members[0].1);
+        assert_eq!(bytes(&doc, 1), members[1].1);
+        assert!(doc.images.values().all(|img| (img.width, img.height) == (2, 1)));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let (doc, warnings) = import(&fixture(), "Fixture").unwrap();
+        assert!(doc.images.values().any(|img| *img.bytes == png() && (img.width, img.height) == (2, 1)));
+        assert!(budget_warnings(&warnings).is_empty(), "{warnings:?}");
+    }
+}
+
 #[test]
 fn other_files_are_not_fig() {
     assert!(try_import(b"{\"document\": {}}", "x").is_none());
