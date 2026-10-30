@@ -847,8 +847,9 @@ impl Node {
     pub fn outline_spreads(&self) -> impl Iterator<Item = (f64, f64)> + '_ {
         let corners = if self.grows_by_exactly_its_spread() { 1.0 } else { SPREAD_MITER_LIMIT };
         let layer = self.layer_effects_reach();
+        let outlined = self.may_spread_as_an_outline();
         self.effects.iter().filter(|e| e.visible).filter_map(move |e| match &e.kind {
-            EffectKind::DropShadow(s) if s.spread.is_finite() && s.spread > 0.0 => {
+            EffectKind::DropShadow(s) if outlined && s.spread.is_finite() && s.spread > 0.0 => {
                 let page = s.radius.abs() * 1.5 + s.offset.0.abs().max(s.offset.1.abs());
                 Some((effect_reach(s.spread) * corners, layer + effect_reach(page)))
             }
@@ -883,9 +884,9 @@ impl Node {
         // A filled outline's spread grows in local units (see [`Node::outline_spreads`]): a box by
         // its spread all round, sharp corners' mitres anywhere within a circle of it.
         let [a, b, c, d, _, _] = world.as_coeffs();
-        let (exact, layer) = (self.grows_by_exactly_its_spread(), self.layer_effects_reach());
+        let (exact, layer, outlined) = (self.grows_by_exactly_its_spread(), self.layer_effects_reach(), self.may_spread_as_an_outline());
         self.effects.iter().filter(|e| e.visible).fold(grown, |r, e| match &e.kind {
-            EffectKind::DropShadow(s) if s.spread.is_finite() && s.spread > 0.0 => {
+            EffectKind::DropShadow(s) if outlined && s.spread.is_finite() && s.spread > 0.0 => {
                 let spread = effect_reach(s.spread);
                 let outline = if exact {
                     figcraft_geom::transform_rect_bbox(world, base.inflate(spread, spread))
@@ -950,6 +951,13 @@ impl Node {
         };
         let glyphs = if let NodeKind::Text(t) = &self.kind { t.path_reach() + t.trim_reach() } else { 0.0 };
         stroke + glyphs
+    }
+
+    /// Whether a drop shadow's spread can grow this node's outline (see [`Node::outline_spreads`]):
+    /// not a group's or stroked text's, which the renderer spreads as pixels, in page units. Others
+    /// can still turn out to be drawn that way (children, images with alpha): counted both ways.
+    fn may_spread_as_an_outline(&self) -> bool {
+        !(matches!(self.kind, NodeKind::Group) || (matches!(self.kind, NodeKind::Text(_)) && self.has_visible_stroke()))
     }
 
     /// Whether a spread grows this node's outline by exactly the spread (no sharp corners).

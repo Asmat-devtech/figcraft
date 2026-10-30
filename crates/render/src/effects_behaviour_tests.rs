@@ -331,6 +331,29 @@ fn effects_reach_as_far_under_a_scaled_or_turned_transform() {
 }
 
 #[test]
+fn effects_reach_as_far_under_a_tiny_scale() {
+    // A rectangle `w` units wide drawn 100 × 100 on the page casts the shadow a 100 × 100 one does:
+    // shadows are page units.
+    let scene = |w: f64| {
+        let (mut d, p) = page();
+        let r = rect(&mut d, p, (0.0, 0.0, w, w), vec![Paint::solid(hex("FF0000"))]);
+        let n = d.get_mut(r).unwrap();
+        n.transform = figcraft_geom::kurbo::Affine::scale(100.0 / w);
+        n.effects = vec![fx(EffectKind::DropShadow(sharp((0.0, 80.0), 0.0)))];
+        d
+    };
+    let v = View { origin: (-100.0, -100.0), scale: 1.0, width: 400, height: 400 };
+    let truth = scene(100.0);
+    let b = render_view_single(&truth, page_of(&truth), &v, &Options::default()).unwrap();
+    for w in [1e6, 1e8, 1e9] {
+        let d = scene(w);
+        let a = render_view_single(&d, page_of(&d), &v, &Options::default()).unwrap();
+        let worst = a.data().iter().zip(b.data()).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+        assert!(worst <= 1, "{w} units wide: the canvas draws {worst} levels off");
+    }
+}
+
+#[test]
 fn a_spread_counts_once_in_an_export() {
     // A 100 × 100 rectangle with a shadow spread by 20 all round, unscaled and doubled.
     for (scale, side) in [(1.0, 140), (2.0, 280)] {

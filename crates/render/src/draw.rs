@@ -422,16 +422,24 @@ pub(crate) fn local_paint_bounds(doc: &Document, n: &Node, to_page: Affine, dept
 /// How far `reach` page units go in a layer's local units along x and y, under `to_page` (its
 /// local → page map): effects are drawn at their size in page units however the layer is scaled,
 /// so they reach further in a layer scaled down. A page square of half-size `reach` comes back as
-/// the rows of the inverse map; a map that collapses the layer keeps `reach`.
+/// the rows of the inverse map, however small the scale (capped where the sums would overflow); a
+/// map that collapses the layer keeps `reach`.
 fn local_reach(to_page: Affine, reach: f64) -> (f64, f64) {
     let [a, b, c, d, _, _] = to_page.as_coeffs();
     let det = (a * d - b * c).abs();
-    if reach <= 0.0 || !det.is_finite() || det < 1e-12 {
+    if reach <= 0.0 || !reach.is_finite() || !det.is_finite() || det == 0.0 {
         return (reach, reach);
     }
-    let (x, y) = ((d.abs() + c.abs()) / det * reach, (b.abs() + a.abs()) / det * reach);
-    if x.is_finite() && y.is_finite() { (x, y) } else { (reach, reach) }
+    let along = |u: f64, v: f64| {
+        let r = (u.abs() + v.abs()) / det * reach;
+        if r.is_nan() { reach } else { r.min(MAX_LOCAL_REACH) }
+    };
+    (along(d, c), along(b, a))
 }
+
+/// The most [`local_reach`] makes of a reach (local units): bounds that large are cut to the view,
+/// and grown by it they stay finite.
+const MAX_LOCAL_REACH: f64 = 1e150;
 
 /// [`local_paint_bounds`], kept in and read from `memo` when there is one. Also returns how many
 /// levels the walk went down, or `None` when the nesting cap cut it short: such bounds depend on
