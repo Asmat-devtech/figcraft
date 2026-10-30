@@ -188,9 +188,9 @@ fn edits_under_and_beside_effects_match() {
     let beside = edit(&across, |d| d.get_mut(s.rect).unwrap().transform = Affine::translate((10.0, 110.0)));
     assert!(partial(check(&mut r, &beside, s.page, &v)));
     // A child of a group with a drop shadow: the shadow moves too, past the group's box with the
-    // child (a view large enough that this stays a part of it).
+    // child.
     let g1 = s.doc.find_by_name("G1", None)[0];
-    let v = View { origin: (260.0, 0.0), scale: 1.0, width: 400, height: 300 };
+    let v = View { origin: (260.0, 0.0), scale: 1.0, width: 300, height: 220 };
     check(&mut r, &beside, s.page, &v);
     let shadowed = edit(&beside, |d| d.get_mut(g1).unwrap().transform = Affine::translate((30.0, 20.0)));
     assert!(partial(check(&mut r, &shadowed, s.page, &v)));
@@ -446,6 +446,36 @@ fn effect_margins_too_large_to_add_stay_large() {
     n.effects = vec![Effect { kind: EffectKind::Texture(t.clone()), visible: true }, Effect { kind: EffectKind::Texture(t), visible: true }];
     let m = crate::draw::effect_margin(&n);
     assert_eq!(m, 2.0 * crate::draw::MAX_REACH);
+}
+
+#[test]
+fn a_moved_layer_renders_where_its_effects_paint_and_no_further() {
+    fonts();
+    let shadow = |dy: f64, r: f64| Effect {
+        kind: EffectKind::DropShadow(Shadow { color: Color::BLACK, offset: (0.0, dy), radius: r, ..Shadow::default() }),
+        ..Effect::drop_shadow()
+    };
+    let blur = Effect { kind: EffectKind::LayerBlur(figcraft_doc::Blur::uniform(30.0)), ..Effect::layer_blur() };
+    for (why, effects) in [("a shadow falling 40", vec![shadow(40.0, 8.0)]), ("a blur of 30", vec![blur])] {
+        let mut d = Document::new("moved");
+        let p = d.first_page().unwrap();
+        let id = d.create(p, NodeKind::Rectangle, "R", 300.0, 200.0, 120.0, 120.0).unwrap();
+        solid(d.node_mut(id).unwrap(), "3366FF");
+        d.node_mut(id).unwrap().effects = effects;
+        let before = Arc::new(d);
+        let after = edit(&before, |d| d.get_mut(id).unwrap().transform = Affine::translate((315.0, 210.0)));
+        let v = View { origin: (0.0, 0.0), scale: 1.0, width: 1000, height: 800 };
+        let mut r = Retained::default();
+        check(&mut r, &before, p, &v);
+        // Where it painted and where it paints now, a pixel round each for rounding out; a quarter
+        // more, as layers grow by a shadow's reach on every side, not only towards its offset.
+        let area = |doc: &Document| doc.world_render_bounds(id).map_or(0.0, |b| (b.width() + 2.0) * (b.height() + 2.0));
+        let most = (area(&before) + area(&after)) * 1.25;
+        match check(&mut r, &after, p, &v) {
+            Work::Partial { pixels } => assert!(pixels as f64 <= most, "{why}: {pixels} pixels rendered, where it paints is {most}"),
+            w => panic!("{why}: {w:?}"),
+        }
+    }
 }
 
 /// Every channel of `a` within `tol` of the same channel of `b` from row `rows_down` on.
