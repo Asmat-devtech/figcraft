@@ -68,10 +68,11 @@ const MAX_CANVAS: u64 = 256 * 1024 * 1024;
 const MAX_CHUNK: u64 = 512 * 1024 * 1024;
 /// Largest image member read.
 const MAX_IMAGE: u64 = figcraft_doc::ImageData::MAX_BYTES;
-/// Total decompressed ZIP image bytes read per import: the native image budget on 64-bit targets,
-/// lower on 32-bit targets to leave address space for the canvas, layers and decoded pixels.
+/// Total decompressed ZIP image bytes read per import: the native image budget (`IMAGE_BUDGET`) on
+/// 64-bit targets, lower on 32-bit targets to leave address space for the canvas, layers and
+/// decoded pixels.
 #[cfg(not(target_pointer_width = "32"))]
-const MAX_IMAGE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const MAX_IMAGE_BYTES: u64 = crate::IMAGE_BUDGET.bytes;
 #[cfg(target_pointer_width = "32")]
 const MAX_IMAGE_BYTES: u64 = 1024 * 1024 * 1024;
 /// Most chunks read from `canvas.fig`.
